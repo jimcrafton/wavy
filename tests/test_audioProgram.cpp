@@ -89,6 +89,47 @@ TEST(AudioProgram, ParametersTakeEffectAtTheNextBlock) {
     EXPECT_EQ(out[0], 0.0f);
 }
 
+TEST(AudioProgram, MixesTwoOscillatorsThroughMasterGain) {
+    Network net;
+    const NodeId line = net.addNode("line");
+    net.node(line).setFloat("count", static_cast<float>(block));
+    NodeId osc[2];
+    const NodeId mix = net.addNode("mix");
+    for (int i = 0; i < 2; ++i) {
+        osc[i] = net.addNode("wrangle");
+        net.node(osc[i]).setString("code", "x = sin(6.28318530718 * (a + sampleIndex * b));");
+        net.connect(line, osc[i]);
+        net.connect(osc[i], mix, i);
+    }
+    const NodeId master = net.addNode("wrangle");
+    net.node(master).setString("code", "x = x * a;");
+    net.connect(mix, master);
+
+    auto program = AudioProgram::compile(net, master, {block, {"x"}});
+    program->warm();
+
+    const float hz[2] = {440.0f, 660.0f}, level = 0.4f;
+    float phase[2] = {0.0f, 0.0f};
+    program->param(master, 0) = level;
+    const size_t blocks = sampleRate / 10 / block;
+    std::vector<float> samples(blocks * block);
+    for (size_t b = 0; b < blocks; ++b) {
+        for (int i = 0; i < 2; ++i) {
+            program->param(osc[i], 0) = phase[i];
+            program->param(osc[i], 1) = hz[i] / static_cast<float>(sampleRate);
+            phase[i] = std::fmod(phase[i] + hz[i] / static_cast<float>(sampleRate) * static_cast<float>(block), 1.0f);
+        }
+        float* out[] = {samples.data() + b * block};
+        program->process(out);
+    }
+
+    for (size_t i = 0; i < samples.size(); ++i) {
+        double expected = 0.0;
+        for (float f : hz) expected += std::sin(6.283185307179586 * std::fmod(static_cast<double>(i) * f / sampleRate, 1.0));
+        ASSERT_NEAR(samples[i], level * static_cast<float>(expected), 4e-3f) << "sample " << i;
+    }
+}
+
 TEST(AudioProgram, RejectsBadBlockSize) {
     OscGainGraph g;
     EXPECT_THROW(AudioProgram::compile(g.net, g.gain, {100, {"x"}}), std::runtime_error);
