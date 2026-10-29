@@ -1,0 +1,7 @@
+[submodule "3rdparty/newui"]
+	path = 3rdparty/newui
+	url = https://github.com/jimcrafton/newui
+[submodule "3rdparty/jitnodes"]
+	path = 3rdparty/jitnodes
+	url = https://github.com/jimcrafton/jitnodes
+	branch = audio
