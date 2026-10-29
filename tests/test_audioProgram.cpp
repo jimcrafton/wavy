@@ -89,6 +89,48 @@ TEST(AudioProgram, ParametersTakeEffectAtTheNextBlock) {
     EXPECT_EQ(out[0], 0.0f);
 }
 
+TEST(AudioProgram, AddPhaseKeepsTheOscillatorContinuousAndResets) {
+    OscGainGraph g;
+    auto program = AudioProgram::compile(g.net, g.gain, {block, {"x"}});
+    const float hz = 440.0f, level = 0.5f;
+    program->param(g.gain, 0) = level;
+    program->param(g.osc, 1) = hz / static_cast<float>(sampleRate);
+    program->addPhase(g.osc, 0, 1);
+    EXPECT_THROW(program->addPhase(g.osc, 1, 1), std::runtime_error);
+
+    auto run = [&](size_t blocks) {
+        std::vector<float> all(blocks * block);
+        for (size_t b = 0; b < blocks; ++b) {
+            float* out[] = {all.data() + b * block};
+            program->process(out);
+        }
+        return all;
+    };
+
+    const std::vector<float> first = run(400);  // long enough for a float phase to drift
+    for (size_t i = 0; i < first.size(); ++i) {
+        const double phase = std::fmod(static_cast<double>(i) * hz / sampleRate, 1.0);
+        ASSERT_NEAR(first[i], level * static_cast<float>(std::sin(6.283185307179586 * phase)), 2e-3f) << "sample " << i;
+    }
+
+    program->resetState();
+    const std::vector<float> again = run(2);
+    for (size_t i = 0; i < again.size(); ++i) ASSERT_NEAR(again[i], first[i], 1e-6f) << "sample " << i;
+}
+
+TEST(AudioProgram, StateBlocksAreAlignedZeroedAndKeyedByNode) {
+    OscGainGraph g;
+    auto program = AudioProgram::compile(g.net, g.gain, {block, {"x"}});
+    StateBlock& s = program->state(g.gain, 100);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(s.data()) % 64, 0u);
+    for (size_t i = 0; i < s.size(); ++i) EXPECT_EQ(s.as<unsigned char>()[i], 0);
+    s.as<unsigned char>()[7] = 9;
+    EXPECT_EQ(&program->state(g.gain, 100), &s);
+    EXPECT_THROW(program->state(g.gain, 64), std::runtime_error);
+    program->resetState();
+    EXPECT_EQ(s.as<unsigned char>()[7], 0);
+}
+
 TEST(AudioProgram, MixesTwoOscillatorsThroughMasterGain) {
     Network net;
     const NodeId line = net.addNode("line");

@@ -70,6 +70,15 @@ The kernel ABI is stateless and fully data-parallel across elements. Audio needs
 
 A per-node `StateBlock` (aligned, preallocated by the compiler, migrated by node id on program swap) covers all rows.
 
+### As built (phase 3b)
+
+Sequential nodes implement `Node::audioStep()` (an `AudioStep`: state size plus a scalar `process` over the x channel); `delay`
+and `biquad` are the first two. History is held inside the step's `StateBlock` (a ring for `delay`, `z1/z2` for `biquad`)
+rather than as a padded input channel, because kernels cannot read other points. The compiler splits the graph at a step:
+the chain above it is its own kernel stage, the step runs on that stage's x, and the chain below reads the step's buffer as an
+ordinary source. Steps can sit inside `mix` branches. An FIR filter is currently a `mix` of `delay`s with gains; a dedicated
+node can follow if profiling asks for it.
+
 ## Events, feedback, swaps
 
 - **MIDI/events**: a fixed-capacity `EventBuffer` per block (offset, status, data) delivered to event-consuming steps.
