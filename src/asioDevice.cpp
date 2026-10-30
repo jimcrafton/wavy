@@ -183,9 +183,9 @@ private:
 std::vector<std::string> listAsioDrivers() {
     std::vector<std::string> names;
     AsioDrivers drivers;
-    char storage[32][32];
+    char storage[32][MAXDRVNAMELEN];
     char* pointers[32];
-    for (auto& s : storage) pointers[&s - storage] = s;
+    for (int i = 0; i < 32; ++i) pointers[i] = storage[i];
     const long count = drivers.getDriverNames(pointers, 32);
     for (long i = 0; i < count; ++i) names.emplace_back(pointers[i]);
     return names;

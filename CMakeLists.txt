@@ -78,15 +78,38 @@ add_custom_target(wavy_version
   COMMENT "Generating wavy/version.h (incrementing build number)"
   VERBATIM)
 
-add_library(wavyCore STATIC src/wavy.cpp)
+add_library(wavyCore STATIC src/wavy.cpp src/audioEngine.cpp src/asioDevice.cpp src/midiInput.cpp src/clipPlayer.cpp src/wavLoader.cpp)
+if(WIN32)
+  target_link_libraries(wavyCore PRIVATE Winmm.lib)
+endif()
 add_library(wavy::core ALIAS wavyCore)
+
+# The Steinberg ASIO SDK is never vendored (its license forbids redistribution): point at a local copy to build the ASIO backend.
+set(ASIO_SDK_DIR "$ENV{ASIO_SDK_DIR}" CACHE PATH "Steinberg ASIO SDK root (contains common/ and host/)")
+if(WIN32 AND ASIO_SDK_DIR AND EXISTS "${ASIO_SDK_DIR}/common/asio.h")
+  set(asioSources
+    "${ASIO_SDK_DIR}/common/asio.cpp"
+    "${ASIO_SDK_DIR}/host/asiodrivers.cpp"
+    "${ASIO_SDK_DIR}/host/pc/asiolist.cpp")
+  target_sources(wavyCore PRIVATE ${asioSources})
+  set_source_files_properties(${asioSources} PROPERTIES COMPILE_OPTIONS "/W0")
+  target_include_directories(wavyCore PRIVATE
+    "${ASIO_SDK_DIR}/common" "${ASIO_SDK_DIR}/host" "${ASIO_SDK_DIR}/host/pc")
+  target_compile_definitions(wavyCore PUBLIC WAVY_HAS_ASIO)
+  target_link_libraries(wavyCore PRIVATE Winmm.lib)
+  add_executable(asioSine src/asioSine.cpp)
+  target_link_libraries(asioSine PRIVATE wavy::core)
+  message(STATUS "ASIO backend enabled (${ASIO_SDK_DIR})")
+else()
+  message(STATUS "ASIO backend disabled (set ASIO_SDK_DIR to build it)")
+endif()
 add_dependencies(wavyCore wavy_version)
 target_include_directories(wavyCore PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<BUILD_INTERFACE:${CMAKE_BINARY_DIR}/include>)
 target_link_libraries(wavyCore PUBLIC jitnodes::jitnodes)
 if(MSVC)
-  target_compile_options(wavyCore PRIVATE /W4 /permissive- /utf-8)
+  target_compile_options(wavyCore PRIVATE /W4 /wd4324 /permissive- /utf-8)
 else()
   target_compile_options(wavyCore PRIVATE -Wall -Wextra -Wpedantic)
 endif()
@@ -95,6 +118,27 @@ add_executable(wavy src/main.cpp)
 target_link_libraries(wavy PRIVATE wavy::core)
 if(WIN32)
   target_link_libraries(wavy PRIVATE newui::newui)
+endif()
+
+if(WIN32 AND TARGET asioSine)
+  option(WAVY_GUI_AUTOMATION "Build the editor with newui's automation server (--automation <pipe>)" ON)
+  add_executable(wavyEditor WIN32 editor/main.cpp editor/session.cpp editor/canvases.cpp)
+  target_include_directories(wavyEditor PRIVATE editor)
+  target_link_libraries(wavyEditor PRIVATE wavy::core newui::newui comdlg32.lib)
+  if(WAVY_GUI_AUTOMATION)
+    target_link_libraries(wavyEditor PRIVATE newui::automation)
+    target_compile_definitions(wavyEditor PRIVATE WAVY_GUI_AUTOMATION)
+  endif()
+  if(MSVC)
+    target_compile_definitions(wavyEditor PRIVATE _SILENCE_CXX20_OLD_SHARED_PTR_ATOMIC_SUPPORT_DEPRECATION_WARNING)
+    target_compile_options(wavyEditor PRIVATE /W3 /permissive /utf-8 /Zc:__cplusplus)
+    target_link_options(wavyEditor PRIVATE /SUBSYSTEM:WINDOWS /ENTRY:mainCRTStartup)
+  endif()
+  add_custom_command(TARGET wavyEditor POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:wavyEditor>/Resources"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+      "${CMAKE_CURRENT_SOURCE_DIR}/editor/ui/mainWindow.newui"
+      "$<TARGET_FILE_DIR:wavyEditor>/Resources/mainWindow.newui")
 endif()
 
 if(WAVY_BUILD_TESTS)

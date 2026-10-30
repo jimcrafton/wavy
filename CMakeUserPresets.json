@@ -1,0 +1,25 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "x64-debug-asio",
+      "displayName": "x64 Debug (ASIO)",
+      "inherits": "x64-debug",
+      "cacheVariables": { "ASIO_SDK_DIR": "D:/code/ASIOSDK" }
+    },
+    {
+      "name": "x64-release-asio",
+      "displayName": "x64 Release (ASIO)",
+      "inherits": "x64-release",
+      "cacheVariables": { "ASIO_SDK_DIR": "D:/code/ASIOSDK" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "x64-debug-asio", "configurePreset": "x64-debug-asio" },
+    { "name": "x64-release-asio", "configurePreset": "x64-release-asio" }
+  ],
+  "testPresets": [
+    { "name": "x64-debug-asio", "configurePreset": "x64-debug-asio", "output": { "outputOnFailure": true } },
+    { "name": "x64-release-asio", "configurePreset": "x64-release-asio", "output": { "outputOnFailure": true } }
+  ]
+}

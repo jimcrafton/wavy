@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wavy mixer</title>
+<style>
+  :root { --bg: #1e1e21; --panel: #252528; --panelGrad: linear-gradient(to bottom, #2e2e32, #222225); --wellGrad: linear-gradient(to bottom, #111113, #18181a); --well: #151517; --border: #38383d; --text: #e4e4e6; --muted: #8e9096; --active: #3fb4f0; }
+  body { width: 520px; height: 270px; display: flex; flex-direction: row; gap: 3px; padding: 2px;
+         background: var(--bg); color: var(--text); font-family: "Segoe UI", sans-serif; font-size: 10px; }
+  #mixerStrips { flex-grow: 1; display: flex; flex-direction: row; gap: 3px; overflow: auto; }
+  .strip { display: flex; flex-direction: column; gap: 3px; width: 84px; padding: 3px; background: linear-gradient(to bottom, #2e2e32, #222225); border-radius: 3px; }
+  .strip .color { height: 4px; background: #7a7a80; }
+  .strip .name { font-weight: 600; text-align: center; }
+  .strip .row { display: flex; flex-direction: row; gap: 2px; }
+  .strip .row button { flex-grow: 1; height: 18px; }
+  .strip .inserts { display: flex; flex-direction: column; gap: 2px; height: 44px; background: linear-gradient(to bottom, #111113, #18181a); }
+  .strip .inserts button { height: 14px; }
+  .strip .sends { display: flex; flex-direction: column; gap: 1px; }
+  .strip .sends input { height: 14px; }
+  .strip .fader { display: flex; flex-direction: row; gap: 3px; flex-grow: 1; }
+  .strip .fader input { width: 22px; }
+  .strip .fader progress { flex-grow: 1; }
+  .strip .level { text-align: center; color: var(--active); }
+  #masterStrip { width: 92px; }
+</style>
+</head>
+<body>
+  <div id="mixerStrips" style="overflow:auto">
+    <div class="strip">
+      <div class="color"></div>
+      <span class="name">1 Drums</span>
+      <select><option>All Ins</option></select>
+      <div class="row"><button>ø</button><button>L</button></div>
+      <div class="inserts"><button>Comp</button><button>EQ</button></div>
+      <div class="sends"><span>Delay</span><input type="range" value="20"><span>Reverb</span><input type="range" value="0"></div>
+      <div class="row"><button>R</button><button>M</button><button>S</button></div>
+      <div class="fader"><input type="range" value="80"><progress value="60" max="100"></progress><progress value="55" max="100"></progress></div>
+      <span class="level">-6.0</span>
+      <select><option>Master</option></select>
+    </div>
+  </div>
+  <div id="masterStrip" class="strip">
+    <div class="color"></div>
+    <span class="name">Master</span>
+    <div class="inserts"><button>Limiter</button></div>
+    <div class="fader"><input type="range" value="80"><progress value="50" max="100"></progress><progress value="48" max="100"></progress></div>
+    <span class="level">-3.0</span>
+    <select><option>Out 1/2</option></select>
+  </div>
+</body>
+</html>

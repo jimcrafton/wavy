@@ -1,0 +1,371 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>wavy - unfold variant</title>
+<style>
+  :root {
+    --bg: #1a1a1d; --panel: #252528; --panelAlt: #1e1e21; --well: #151517; --border: #38383d; --text: #e4e4e6;
+    --muted: #8e9096; --active: #3fb4f0; --rec: #e5484d; --solo: #f0a03a; --meter: #43c27a; --playhead: #f2e54a;
+  }
+  .muted { color: var(--muted); }
+  body { box-sizing: border-box; width: 1440px; height: 900px; display: flex; flex-direction: column; gap: 3px; padding: 3px;
+         background: var(--bg); color: var(--text); font-family: "Segoe UI", sans-serif; font-size: 11px; }
+
+  .controlBar { display: flex; flex-direction: row; align-items: center; gap: 14px; height: 56px; padding: 4px 10px;
+                background: linear-gradient(to bottom, #2e2e32, #222225); border-radius: 3px; }
+  .group { display: flex; flex-direction: column; gap: 4px; }
+  .group .heading { font-size: 9px; color: var(--muted); }
+  .group .cells { display: flex; flex-direction: row; align-items: center; gap: 4px; height: 26px; }
+  .controlBar .spacer { flex-grow: 1; }
+  .controlBar button { width: 30px; height: 24px; }
+  #recordButton { color: var(--rec); }
+  #playButton { color: var(--active); }
+  #positionLabel { width: 130px; font-size: 20px; font-weight: 600; text-align: center; background: linear-gradient(to bottom, #111113, #18181a); color: var(--active); }
+  #bpmField { width: 56px; }
+  #timeSigField { width: 40px; }
+  #keyField { width: 64px; }
+  #linkButton, #tapButton { width: 40px; }
+  #loopButton, #punchButton, #followButton { width: 52px; }
+  #clickVolume { width: 60px; }
+  #countInSelect { width: 80px; }
+  #toolSelect { width: 80px; }
+  #rulerModeSelect { width: 96px; }
+  #gridSelect { width: 64px; }
+  #snapModeSelect { width: 84px; }
+  #focusLabel { width: 220px; text-align: center; color: var(--active); background: linear-gradient(to bottom, #111113, #18181a); }
+  #cpuLabel { width: 60px; text-align: right; color: var(--muted); }
+  #sampleRateLabel { width: 60px; color: var(--muted); }
+
+  .main { display: flex; flex-direction: row; gap: 3px; flex-grow: 1; }
+
+  .browser { display: flex; flex-direction: column; gap: 3px; width: 250px; padding: 6px; background: linear-gradient(to bottom, #2e2e32, #222225); border-radius: 3px; }
+  #browserSearch { height: 24px; }
+  .browserBody { display: flex; flex-direction: row; gap: 3px; flex-grow: 1; }
+  #browserCategories { width: 92px; background: var(--panelAlt); display: flex; flex-direction: column; gap: 2px; padding: 4px; }
+  #browserCategories span { height: 20px; }
+  #browserList { flex-grow: 1; display: flex; flex-direction: column; background: var(--panelAlt); overflow: auto; }
+  .row { display: flex; flex-direction: row; align-items: center; gap: 4px; height: 20px; padding: 0px 4px; }
+  .row .nm { flex-grow: 1; }
+  .row .meta { color: var(--muted); font-size: 9px; }
+  .row.sel { background: #2a4658; }
+  .strip { height: 36px; background: linear-gradient(to bottom, #111113, #18181a); }
+  .audition { display: flex; flex-direction: row; align-items: center; gap: 6px; height: 34px; background: linear-gradient(to bottom, #111113, #18181a); padding: 4px; }
+  .audition button { width: 30px; height: 24px; }
+  #auditionLabel { flex-grow: 1; color: var(--muted); }
+
+  .center { display: flex; flex-direction: column; gap: 3px; flex-grow: 1; }
+  .arrangement { display: flex; flex-direction: column; flex-grow: 3; background: var(--panel); border-radius: 3px; }
+  .editBar { display: flex; flex-direction: row; align-items: center; gap: 6px; height: 26px; padding: 0px 6px; background: #2b2b2f; }
+  .corner { width: 230px; background: var(--panelAlt); }
+  .overviewRow { display: flex; flex-direction: row; height: 30px; }
+  #overviewCanvas { flex-grow: 1; position: relative; background: linear-gradient(to bottom, #111113, #18181a); }
+  .rulerRow { display: flex; flex-direction: row; height: 26px; }
+  #rulerCanvas { flex-grow: 1; position: relative; background: var(--panelAlt); }
+  .bar { position: absolute; top: 12px; font-size: 9px; color: var(--muted); }
+  .loopBrace { position: absolute; left: 224px; top: 1px; width: 224px; height: 8px; background: #3fb4f0; opacity: 0.55; border-radius: 2px; }
+  .playTri { position: absolute; left: 296px; top: 11px; font-size: 9px; color: var(--playhead); }
+  .playLine { position: absolute; left: 300px; top: 0px; width: 1px; height: 330px; background: var(--playhead); }
+  .trackArea { display: flex; flex-direction: row; flex-grow: 1; }
+  #trackHeaders { width: 230px; display: flex; flex-direction: column; overflow: auto; background: var(--panelAlt); }
+  .trackHeader { display: flex; flex-direction: row; gap: 4px; height: 72px; padding: 3px 4px 3px 0px; background: #212124; }
+  .trackHeader .color { width: 5px; }
+  .trackHeader .col { display: flex; flex-direction: column; gap: 2px; flex-grow: 1; }
+  .trackHeader .top { display: flex; flex-direction: row; align-items: center; gap: 3px; height: 20px; }
+  .trackHeader .name { flex-grow: 1; font-weight: 600; }
+  .trackHeader .kind { font-size: 9px; color: var(--muted); }
+  .trackHeader .chev { width: 18px; height: 20px; }
+  .trackHeader .top button { width: 22px; height: 20px; }
+  .trackHeader .routing { display: flex; flex-direction: row; gap: 3px; height: 20px; }
+  .trackHeader .routing select { flex-grow: 1; width: 40px; height: 20px; }
+  .trackHeader .mix { display: flex; flex-direction: row; gap: 4px; align-items: center; height: 18px; }
+  .trackHeader .mix input { flex-grow: 1; width: 30px; }
+  .graphHeader { display: flex; flex-direction: column; gap: 4px; height: 78px; padding: 6px 8px; background: #172420; color: var(--text); }
+  .graphHeader .gh { font-size: 9px; color: #5fc7a0; font-weight: 700; }
+  .graphHeader button { width: 50px; height: 20px; }
+  .graphHeader .top { display: flex; flex-direction: row; align-items: center; gap: 6px; height: 22px; }
+  .graphHeader .name { flex-grow: 1; font-weight: 600; }
+  .chip { box-sizing: border-box; position: absolute; width: 62px; height: 24px; border-radius: 3px; background: #26262b; border: 1px solid #4a4a52; font-size: 10px; text-align: center; padding: 4px 0px; }
+  .chip.src { background: #1f4a3a; border-color: #5fc7a0; }
+  .chip.mod { background: #5a2442; border-color: #e05fa8; }
+  .graphStrip { position: absolute; left: 0px; top: 217px; width: 896px; height: 76px; background: #14211c; }
+  .autoHeader { display: flex; flex-direction: row; align-items: center; gap: 6px; height: 40px; padding: 0px 8px; background: #1b1b1e; color: var(--muted); }
+  .foldHeader { display: flex; flex-direction: row; align-items: center; gap: 4px; height: 28px; padding: 0px 4px 0px 0px; background: #212124; }
+  .foldHeader .color { width: 5px; height: 28px; background: #c9b458; }
+  .foldHeader .name { flex-grow: 1; font-weight: 600; }
+  .foldHeader button { width: 22px; height: 20px; }
+
+  #timelineCanvas { flex-grow: 1; position: relative; background: linear-gradient(to bottom, #111113, #18181a); border: 1px solid var(--border); }
+  .lane { position: absolute; left: 0px; width: 896px; height: 1px; background: #2c2c30; }
+  .clip { position: absolute; border-radius: 3px; overflow: hidden; }
+  .clip .ch { display: flex; flex-direction: row; align-items: center; gap: 4px; height: 14px; padding: 0px 4px; color: #101012; font-weight: 600; font-size: 10px; }
+  .clip .ch .nm { flex-grow: 1; }
+  .clip .ch .badge { font-size: 8px; font-weight: 700; }
+  .t1 { background: #4a3022; } .t1 .ch { background: #d98a5f; }
+  .t2 { background: #27335e; } .t2 .ch { background: #6c8cf0; }
+  .t3 { background: #1f4a3a; } .t3 .ch { background: #5fc7a0; }
+  .t4 { background: #5a2442; } .t4 .ch { background: #e05fa8; }
+  .selected { border: 2px solid #3fb4f0; }
+  .autoLine { position: absolute; left: 0px; top: 146px; width: 896px; height: 36px; }
+  .secondsRow { display: flex; flex-direction: row; height: 18px; }
+  #secondsCanvas { flex-grow: 1; position: relative; background: var(--panelAlt); }
+
+  .dock { display: flex; flex-direction: column; height: 262px; gap: 3px; padding: 4px; background: linear-gradient(to bottom, #2e2e32, #222225); border-radius: 3px; }
+  .dock .head { display: flex; flex-direction: row; align-items: center; gap: 3px; height: 24px; }
+  .dock .head button { width: 84px; height: 22px; }
+  #detailTitle { flex-grow: 1; text-align: right; color: var(--muted); }
+  .dock .body { display: flex; flex-direction: row; gap: 3px; flex-grow: 1; }
+  .clipPanel { width: 210px; display: flex; flex-direction: column; gap: 5px; padding: 6px; background: var(--panelAlt); }
+  .clipPanel .title { display: flex; flex-direction: row; align-items: center; gap: 6px; }
+  .clipPanel .title .nm { flex-grow: 1; font-weight: 600; font-size: 13px; }
+  .clipPanel .badge { color: #5fc7a0; font-size: 9px; font-weight: 700; }
+  .clipPanel .param { display: flex; flex-direction: row; align-items: center; gap: 6px; height: 22px; }
+  .clipPanel .param .lbl { width: 62px; color: var(--muted); }
+  .clipPanel .param input { flex-grow: 1; }
+  .clipPanel .param .val { width: 40px; text-align: right; color: var(--active); }
+  .clipPanel .sect { font-size: 9px; color: var(--muted); }
+  #detailCanvas { flex-grow: 1; position: relative; background: linear-gradient(to bottom, #111113, #18181a); border: 1px solid var(--border); }
+  .node { position: absolute; width: 96px; height: 52px; background: #26262b; border: 1px solid #4a4a52; border-radius: 4px; }
+  .node .t { height: 16px; padding: 2px 6px; font-weight: 600; background: #34343b; }
+  .node .p { padding: 4px 6px; color: var(--muted); font-size: 9px; }
+  .node.src .t { background: #1f4a3a; } .node.mod .t { background: #5a2442; }
+  .deck { position: absolute; top: 8px; height: 224px; background: #26262b; border: 1px solid #4a4a52; border-radius: 4px; }
+  .deck .dt { display: flex; flex-direction: row; align-items: center; gap: 6px; height: 24px; padding: 0px 8px; background: #34343b; }
+  .deck .dt .dot { width: 8px; height: 8px; border-radius: 4px; background: #43c27a; }
+  .wire { position: absolute; height: 2px; background: #6a6a74; }
+  #mixerHost { width: 0px; overflow: auto; }
+  #deviceChain { width: 280px; display: flex; flex-direction: column; gap: 2px; background: var(--panelAlt); overflow: auto; padding: 4px; }
+  .device { display: flex; flex-direction: row; align-items: center; gap: 6px; height: 34px; padding: 0px 6px; background: #2a2a2f; border-radius: 3px; }
+  .device .dot { width: 8px; height: 8px; border-radius: 4px; background: #43c27a; }
+  .device .dot.off { background: #55555c; }
+  .device .nm { flex-grow: 1; }
+  .device .meta { color: var(--muted); font-size: 9px; }
+  .device.empty { background: #202023; color: var(--muted); }
+
+  .status { display: flex; flex-direction: row; align-items: center; gap: 8px; height: 22px; padding: 2px 8px; background: var(--panel); border-radius: 3px; }
+  #statusText { flex-grow: 1; color: var(--muted); }
+  #recentDevices { width: 200px; text-align: right; color: var(--muted); }
+</style>
+</head>
+<body>
+  <div class="controlBar">
+    <div class="group"><span class="heading">TEMPO</span>
+      <div class="cells"><button id="linkButton">Link</button><button id="tapButton">Tap</button><input type="text" id="bpmField" value="120.00"></div></div>
+    <div class="group"><span class="heading">SIGNATURE</span>
+      <div class="cells"><input type="text" id="timeSigField" value="4/4"><input type="text" id="keyField" value="C Maj"></div></div>
+    <div class="group"><span class="heading">CLICK</span>
+      <div class="cells"><input type="checkbox" id="metronomeToggle"><input type="range" id="clickVolume" value="70"><select id="countInSelect"><option>Count-in 1</option></select></div></div>
+    <div class="group"><span class="heading">TRANSPORT</span>
+      <div class="cells"><button id="rewindButton">|&lt;</button><button id="playButton">&gt;</button><button id="pauseButton">||</button><button id="stopButton">[]</button><button id="recordButton">O</button><button id="forwardButton">&gt;|</button></div></div>
+    <div class="group"><span class="heading">POSITION</span>
+      <div class="cells"><span id="positionLabel">005.02.01</span></div></div>
+    <div class="group"><span class="heading">LOOP</span>
+      <div class="cells"><button id="loopButton">Loop</button><button id="punchButton">Punch</button><button id="followButton">Follow</button></div></div>
+    <div class="group"><span class="heading">FOCUS</span>
+      <div class="cells"><span id="focusLabel">3 Pad - Drone (Graph) - Select</span></div></div>
+    <div class="spacer"></div>
+    <div class="group"><span class="heading">STATUS</span>
+      <div class="cells"><span id="sampleRateLabel">48 kHz</span><span id="cpuLabel">CPU 7%</span></div></div>
+  </div>
+
+  <div class="main">
+    <div class="browser">
+      <input type="text" id="browserSearch" placeholder="Search for anything">
+      <div class="browserBody">
+        <div id="browserCategories"><span>Sounds</span><span>Drums</span><span>Instruments</span><span>Audio Effects</span><span>MIDI Effects</span><span>Generators</span><span>Samples</span><span>Packs</span></div>
+        <div id="browserList">
+          <div class="row"><span class="nm">Kick 808 Deep</span><span class="meta">0.4s</span></div>
+          <div class="row sel"><span class="nm">Kick Loop 120</span><span class="meta">2.0s</span></div>
+          <div class="row"><span class="nm">Snare Tight</span><span class="meta">0.3s</span></div>
+          <div class="row"><span class="nm">Hat Closed 01</span><span class="meta">0.1s</span></div>
+          <div class="row"><span class="nm">Break Amen 120</span><span class="meta">8.0s</span></div>
+          <div class="row"><span class="nm">Perc Shaker Loop</span><span class="meta">4.0s</span></div>
+          <div class="row"><span class="nm">Reverb</span><span class="meta">3%</span></div>
+          <div class="row"><span class="nm">Compressor</span><span class="meta">1%</span></div>
+          <div class="row"><span class="nm">Euclid Sequencer</span><span class="meta">GEN</span></div>
+          <div class="row"><span class="nm">Drone Osc</span><span class="meta">GEN</span></div>
+        </div>
+      </div>
+      <div class="strip">
+        <svg width="228" height="36"><path d="M2 18 L8 6 L12 30 L18 10 L24 26 L34 16 L50 19 L70 17 L100 18 L130 18 L170 18 L226 18" fill="none" stroke="#3fb4f0" stroke-width="1"/></svg>
+      </div>
+      <div class="audition">
+        <button id="auditionButton">&gt;</button>
+        <input type="checkbox" id="autoPlayToggle"><label>Auto</label>
+        <span id="auditionLabel">Kick Loop 120 - 120 BPM</span>
+      </div>
+    </div>
+
+    <div class="center">
+      <div class="arrangement">
+        <div class="editBar"><span class="muted">TOOL</span><select id="toolSelect"><option>Select</option></select><span class="muted">RULER</span><select id="rulerModeSelect"><option>Bars+Beats</option></select><span class="muted">GRID</span><select id="gridSelect"><option>1/16</option></select><select id="snapModeSelect"><option>Absolute</option></select><input type="checkbox" id="snapToggle" checked><label>Snap</label></div>
+        <div class="overviewRow"><div class="corner"></div>
+          <div id="overviewCanvas">
+            <div style="position:absolute; left:0px; top:4px; width:230px; height:5px; background:#d98a5f"></div>
+            <div style="position:absolute; left:30px; top:11px; width:300px; height:5px; background:#6c8cf0"></div>
+            <div style="position:absolute; left:60px; top:18px; width:200px; height:5px; background:#5fc7a0"></div>
+            <div style="position:absolute; left:130px; top:24px; width:200px; height:4px; background:#e05fa8"></div>
+            <div style="position:absolute; left:0px; top:0px; width:560px; height:28px; border: 1px solid #3fb4f0"></div>
+          </div>
+        </div>
+        <div class="rulerRow"><div class="corner"></div>
+          <div id="rulerCanvas">
+            <div class="loopBrace"></div>
+            <span class="bar" style="left:3px">1</span><span class="bar" style="left:59px">2</span><span class="bar" style="left:115px">3</span><span class="bar" style="left:171px">4</span>
+            <span class="bar" style="left:227px">5</span><span class="bar" style="left:283px">6</span><span class="bar" style="left:339px">7</span><span class="bar" style="left:395px">8</span>
+            <span class="bar" style="left:451px">9</span><span class="bar" style="left:507px">10</span><span class="bar" style="left:563px">11</span><span class="bar" style="left:619px">12</span>
+            <span class="bar" style="left:675px">13</span><span class="bar" style="left:731px">14</span><span class="bar" style="left:787px">15</span><span class="bar" style="left:843px">16</span>
+            <span class="playTri">v</span>
+          </div>
+        </div>
+        <div class="trackArea">
+          <div id="trackHeaders">
+            <div class="trackHeader">
+              <div class="color" style="background:#d98a5f"></div>
+              <div class="col">
+                <div class="top"><button class="chev">v</button><span class="name">1 Drums</span><span class="kind">AUDIO</span><button>R</button><button>M</button><button>S</button></div>
+                <div class="routing"><select><option>All Ins</option></select><select><option>Auto</option></select><select><option>Master</option></select></div>
+                <div class="mix"><span class="muted">Vol</span><input type="range" value="80"><span class="muted">Pan</span><input type="range" value="50"></div>
+              </div>
+            </div>
+            <div class="trackHeader">
+              <div class="color" style="background:#6c8cf0"></div>
+              <div class="col">
+                <div class="top"><button class="chev">v</button><span class="name">2 Bass</span><span class="kind">MIDI</span><button>R</button><button>M</button><button>S</button></div>
+                <div class="routing"><select><option>Keys</option></select><select><option>Auto</option></select><select><option>Master</option></select></div>
+                <div class="mix"><span class="muted">Vol</span><input type="range" value="70"><span class="muted">Pan</span><input type="range" value="50"></div>
+              </div>
+            </div>
+            <div class="trackHeader">
+              <div class="color" style="background:#5fc7a0"></div>
+              <div class="col">
+                <div class="top"><button class="chev">v</button><span class="name">3 Pad</span><span class="kind">GEN</span><button>R</button><button>M</button><button>S</button></div>
+                <div class="routing"><select><option>No Input</option></select><select><option>Auto</option></select><select><option>Master</option></select></div>
+                <div class="mix"><span class="muted">Vol</span><input type="range" value="60"><span class="muted">Pan</span><input type="range" value="50"></div>
+              </div>
+            </div>
+            <div class="graphHeader">
+              <div class="top"><span class="gh">GRAPH</span><span class="name">Drone</span><button id="openPatchButton">Patch</button></div>
+              <span class="muted">Cutoff envelope</span>
+            </div>
+            <div class="trackHeader">
+              <div class="color" style="background:#e05fa8"></div>
+              <div class="col">
+                <div class="top"><button class="chev">&gt;</button><span class="name">4 Arp</span><span class="kind">SEQ</span><button>R</button><button>M</button><button>S</button></div>
+                <div class="routing"><select><option>No Input</option></select><select><option>Auto</option></select><select><option>Lead Synth</option></select></div>
+                <div class="mix"><span class="muted">Vol</span><input type="range" value="65"><span class="muted">Pan</span><input type="range" value="60"></div>
+              </div>
+            </div>
+            <div class="foldHeader"><div class="color"></div><button class="chev">&gt;</button><span class="name">5 Perc</span><button>M</button><button>S</button></div>
+          </div>
+
+          <div id="timelineCanvas">
+            <div class="lane" style="top:71px"></div><div class="lane" style="top:143px"></div><div class="lane" style="top:215px"></div><div class="lane" style="top:293px"></div><div class="lane" style="top:365px"></div>
+
+            <div class="clip t1" style="left:0px; top:2px; width:222px; height:68px">
+              <div class="ch"><span class="nm">Kick Loop</span><span class="badge">WAV</span></div>
+              <svg width="222" height="54"><defs><pattern id="kick" width="14" height="54" patternUnits="userSpaceOnUse"><path d="M0 27 L1 6 L2 48 L3 12 L4 42 L6 18 L8 36 L10 24 L14 27" fill="none" stroke="#d98a5f" stroke-width="1"/></pattern></defs><rect width="222" height="54" fill="url(#kick)"/></svg>
+            </div>
+            <div class="clip t1" style="left:224px; top:2px; width:222px; height:68px">
+              <div class="ch"><span class="nm">Kick Loop</span><span class="badge">WAV</span></div>
+              <svg width="222" height="54"><rect width="222" height="54" fill="url(#kick)"/></svg>
+            </div>
+            <div class="clip t1" style="left:448px; top:2px; width:446px; height:68px">
+              <div class="ch"><span class="nm">Break Amen</span><span class="badge">WAV</span></div>
+              <svg width="446" height="54"><path d="M0 27 L4 4 L8 50 L14 14 L20 40 L30 24 L56 27 L60 8 L64 46 L70 20 L84 27 L112 27 L116 6 L120 48 L126 16 L140 27 L168 27 L172 10 L176 44 L184 22 L200 27 L224 27 L228 4 L232 50 L240 14 L252 27 L280 27 L284 8 L288 46 L296 20 L312 27 L336 27 L340 6 L344 48 L352 16 L368 27 L392 27 L396 10 L400 44 L410 22 L430 27 L446 27" fill="none" stroke="#d98a5f" stroke-width="1"/></svg>
+            </div>
+
+            <div class="clip t2" style="left:56px; top:74px; width:166px; height:68px">
+              <div class="ch"><span class="nm">Bass A</span><span class="badge">MIDI</span></div>
+              <svg width="166" height="54"><rect x="4" y="40" width="26" height="5" fill="#6c8cf0"/><rect x="36" y="40" width="12" height="5" fill="#6c8cf0"/><rect x="56" y="34" width="26" height="5" fill="#6c8cf0"/><rect x="88" y="40" width="12" height="5" fill="#6c8cf0"/><rect x="108" y="28" width="26" height="5" fill="#6c8cf0"/><rect x="138" y="34" width="22" height="5" fill="#6c8cf0"/></svg>
+            </div>
+            <div class="clip t2" style="left:224px; top:74px; width:222px; height:68px">
+              <div class="ch"><span class="nm">Bass A</span><span class="badge">MIDI</span></div>
+              <svg width="222" height="54"><rect x="4" y="40" width="26" height="5" fill="#6c8cf0"/><rect x="36" y="40" width="12" height="5" fill="#6c8cf0"/><rect x="56" y="34" width="26" height="5" fill="#6c8cf0"/><rect x="88" y="40" width="12" height="5" fill="#6c8cf0"/><rect x="108" y="28" width="26" height="5" fill="#6c8cf0"/><rect x="138" y="34" width="22" height="5" fill="#6c8cf0"/><rect x="170" y="40" width="26" height="5" fill="#6c8cf0"/><rect x="200" y="22" width="18" height="5" fill="#6c8cf0"/></svg>
+            </div>
+            <div class="clip t2" style="left:448px; top:74px; width:222px; height:68px">
+              <div class="ch"><span class="nm">Bass B</span><span class="badge">MIDI</span></div>
+              <svg width="222" height="54"><rect x="4" y="30" width="52" height="5" fill="#6c8cf0"/><rect x="60" y="24" width="26" height="5" fill="#6c8cf0"/><rect x="92" y="30" width="52" height="5" fill="#6c8cf0"/><rect x="150" y="18" width="26" height="5" fill="#6c8cf0"/><rect x="182" y="24" width="34" height="5" fill="#6c8cf0"/></svg>
+            </div>
+
+            <div class="graphStrip">
+              <div class="chip src" style="left:116px; top:6px">Saw Osc</div>
+              <div class="chip src" style="left:116px; top:34px">Noise</div>
+              <div class="chip" style="left:196px; top:20px">Mix</div>
+              <div class="chip" style="left:276px; top:20px">Biquad LP</div>
+              <div class="chip" style="left:356px; top:20px">Gain</div>
+              <div class="chip mod" style="left:276px; top:50px; height:20px; padding:2px 0px">LFO 0.2 Hz</div>
+              <svg width="896" height="76" style="position:absolute; left:0px; top:0px"><polyline points="112,72 192,70 272,60 352,54 448,64" fill="none" stroke="#e4e4e6" stroke-width="1.2" opacity="0.7"/><circle cx="272" cy="60" r="2.5" fill="#e4e4e6"/><circle cx="352" cy="54" r="2.5" fill="#e4e4e6"/><polyline points="112,16 448,16" fill="none" stroke="#5fc7a0" stroke-width="1" opacity="0.0"/></svg>
+            </div>
+
+            <div class="clip t3 selected" style="left:112px; top:146px; width:336px; height:68px">
+              <div class="ch"><span class="nm">Drone</span><span class="badge">GEN</span></div>
+              <svg width="332" height="50"><path d="M0 25 q10 -16 20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t20 0 t12 0" fill="none" stroke="#5fc7a0" stroke-width="1"/><polyline points="0,40 80,36 160,20 240,12 332,26" fill="none" stroke="#e4e4e6" stroke-width="1.2"/><circle cx="160" cy="20" r="2.5" fill="#e4e4e6"/><circle cx="240" cy="12" r="2.5" fill="#e4e4e6"/></svg>
+            </div>
+            <div class="clip t3" style="left:450px; top:146px; width:222px; height:68px">
+              <div class="ch"><span class="nm">Drone</span><span class="badge">GEN</span></div>
+              <svg width="222" height="54"><path d="M0 27 q8 -12 16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0" fill="none" stroke="#5fc7a0" stroke-width="1"/></svg>
+            </div>
+
+            <div class="clip t4" style="left:224px; top:296px; width:222px; height:68px">
+              <div class="ch"><span class="nm">Euclid 5/8</span><span class="badge">SEQ</span></div>
+              <svg width="222" height="54"><rect x="4" y="34" width="12" height="5" fill="#e05fa8"/><rect x="60" y="26" width="12" height="5" fill="#e05fa8"/><rect x="88" y="34" width="12" height="5" fill="#e05fa8"/><rect x="116" y="18" width="12" height="5" fill="#e05fa8"/><rect x="172" y="26" width="12" height="5" fill="#e05fa8"/><circle cx="10" cy="48" r="2" fill="#e05fa8"/><circle cx="38" cy="48" r="1.5" fill="#7a3a5c"/><circle cx="66" cy="48" r="2" fill="#e05fa8"/><circle cx="94" cy="48" r="2" fill="#e05fa8"/><circle cx="122" cy="48" r="2" fill="#e05fa8"/><circle cx="150" cy="48" r="1.5" fill="#7a3a5c"/><circle cx="178" cy="48" r="2" fill="#e05fa8"/><circle cx="206" cy="48" r="1.5" fill="#7a3a5c"/></svg>
+            </div>
+            <div class="clip t4" style="left:448px; top:296px; width:222px; height:68px">
+              <div class="ch"><span class="nm">Euclid 7/16</span><span class="badge">SEQ</span></div>
+              <svg width="222" height="54"><rect x="4" y="34" width="8" height="5" fill="#e05fa8"/><rect x="36" y="26" width="8" height="5" fill="#e05fa8"/><rect x="60" y="30" width="8" height="5" fill="#e05fa8"/><rect x="92" y="18" width="8" height="5" fill="#e05fa8"/><rect x="124" y="26" width="8" height="5" fill="#e05fa8"/><rect x="156" y="34" width="8" height="5" fill="#e05fa8"/><rect x="188" y="22" width="8" height="5" fill="#e05fa8"/></svg>
+            </div>
+
+            <div class="clip t1" style="left:0px; top:367px; width:446px; height:24px; background:#4a4322">
+              <div class="ch" style="background:#c9b458"><span class="nm">Shaker</span><span class="badge">WAV</span></div>
+            </div>
+
+            <div class="playLine"></div>
+          </div>
+        </div>
+        <div class="secondsRow"><div class="corner"></div>
+          <div id="secondsCanvas">
+            <span class="bar" style="left:3px; top:2px">0:00</span><span class="bar" style="left:115px; top:2px">0:04</span><span class="bar" style="left:227px; top:2px">0:08</span><span class="bar" style="left:339px; top:2px">0:12</span><span class="bar" style="left:451px; top:2px">0:16</span><span class="bar" style="left:563px; top:2px">0:20</span><span class="bar" style="left:675px; top:2px">0:24</span><span class="bar" style="left:787px; top:2px">0:28</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="dock">
+        <div class="head">
+          <button id="mixerTab">Mixer</button><button id="pianoRollTab">Piano Roll</button><button id="audioEditTab">Audio Edit</button><button id="patchTab">Patch</button><button id="deviceTab">Devices</button>
+          <span id="detailTitle">Drone - Graph clip, audio out - bars 3-8</span>
+        </div>
+        <div class="body">
+          <div class="clipPanel" id="clipPanel">
+            <div class="title"><span class="nm" id="clipName">Drone</span><span class="badge">GEN</span></div>
+            <span class="sect">PROMOTED PARAMETERS</span>
+            <div class="param"><span class="lbl">Cutoff</span><input type="range" value="62"><span class="val">1.8k</span></div>
+            <div class="param"><span class="lbl">Resonance</span><input type="range" value="30"><span class="val">0.3</span></div>
+            <div class="param"><span class="lbl">Detune</span><input type="range" value="48"><span class="val">-4c</span></div>
+            <div class="param"><span class="lbl">Level</span><input type="range" value="75"><span class="val">-6 dB</span></div>
+            <div class="param"><input type="checkbox" id="clipLoopToggle" checked><label>Loop</label><span class="muted">Length 6 bars</span></div>
+          </div>
+          <div id="detailCanvas">
+            <div class="deck" style="left:8px; width:236px"><div class="dt"><span class="dot"></span><span>EQ Eight</span><span class="muted">Pad Air</span></div>
+              <svg width="236" height="190"><polyline points="0,100 30,100 55,96 80,70 110,52 140,80 175,104 205,100 236,100" fill="none" stroke="#3fb4f0" stroke-width="2"/><circle cx="80" cy="70" r="5" fill="#3fb4f0"/><circle cx="110" cy="52" r="5" fill="#3fb4f0"/><circle cx="175" cy="104" r="5" fill="#3fb4f0"/><line x1="0" y1="100" x2="236" y2="100" stroke="#38383d"/></svg></div>
+            <div class="deck" style="left:252px; width:200px"><div class="dt"><span class="dot"></span><span>Compressor</span><span class="muted">Glue</span></div>
+              <svg width="200" height="190"><line x1="16" y1="170" x2="184" y2="20" stroke="#38383d"/><polyline points="16,170 96,92 130,70 184,60" fill="none" stroke="#3fb4f0" stroke-width="2"/><rect x="16" y="20" width="168" height="30" fill="#e5484d" opacity="0.25"/></svg></div>
+            <div class="deck" style="left:460px; width:128px"><div class="dt"><span class="dot"></span><span>Reverb</span><span class="muted">Hall</span></div>
+              <svg width="128" height="190"><polyline points="0,150 24,60 40,100 56,80 80,120 128,140" fill="none" stroke="#5fc7a0" stroke-width="1.5"/></svg></div>
+          </div>
+          <div id="mixerHost"></div>
+          <div id="deviceChain">
+            <div class="device"><span class="dot"></span><span class="nm">Drone (clip graph)</span><span class="meta">GEN</span></div>
+            <div class="device"><span class="dot"></span><span class="nm">EQ Eight</span><span class="meta">1%</span></div>
+            <div class="device"><span class="dot off"></span><span class="nm">Compressor</span><span class="meta">off</span></div>
+            <div class="device"><span class="dot"></span><span class="nm">Reverb</span><span class="meta">3%</span></div>
+            <div class="device empty"><span class="nm">Drop audio effects here</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="status"><span id="statusText">Drone - Graph (audio) - bars 3-8 - 5 nodes - preview rendered</span><span id="recentDevices">EQ  Comp  Reverb</span></div>
+</body>
+</html>

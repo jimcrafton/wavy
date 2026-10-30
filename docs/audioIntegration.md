@@ -79,6 +79,30 @@ the chain above it is its own kernel stage, the step runs on that stage's x, and
 ordinary source. Steps can sit inside `mix` branches. An FIR filter is currently a `mix` of `delay`s with gains; a dedicated
 node can follow if profiling asks for it.
 
+### As built (phase 2)
+
+`wavy::AudioEngine` (`include/wavy/audioEngine.h`) is the device-independent audio side. A device callback calls `render(out, frames)`
+with any frame count; the engine serves the program's fixed-size blocks from a staging buffer.
+
+- **Params**: `setParam(node, index, value)` pushes onto a 1024-slot SPSC ring (`spscRing.h`); the audio thread drains it at the start
+  of each block through `AudioProgram::tryParam` (noexcept; unknown nodes or indices are ignored).
+- **Swap**: `swapProgram(next)` parks the program in an atomic slot (a program that was never picked up is replaced and freed on the
+  main thread). At the next block boundary the audio thread migrates state into it, runs both programs for that block and crossfades
+  linearly old to new, then pushes the old program onto a 16-slot retire ring. A swap is only accepted while the ring has room, so the
+  audio thread never frees anything; `collectRetired()` on the main thread deletes. Block size and output count must match the engine's.
+- **ASIO**: `AudioDevice` (`audioDevice.h`) with an ASIO backend in `src/asioDevice.cpp`, built only when `ASIO_SDK_DIR` (CMake
+  cache variable or environment variable) points at the SDK; otherwise `makeAsioDevice()` returns null. Output only for now, using the
+  driver's preferred buffer size; float32/64 and int16/24/32 little-endian sample types (others play silence). Driver reset and
+  sample-rate messages set `resetRequested()` for the main thread to reopen and rebuild.
+- Not done: input channels, a device-driven block size different from the program's (the engine copes, but there is no helper to pick
+  one), warming the JIT stack on the device thread, and a hands-on test against a real driver.
+
+## As built (phase 4)
+
+- `jitnodes::EventBuffer` holds up to 256 `AudioEvent`s (offset, status, data1, data2) sorted by offset; `AudioProgram::process(out, &events)` hands it to every step. `AudioStep::processEvents` is the hook; steps split the block at event offsets so each event lands on its exact sample.
+- `adsr` gates x with a linear envelope: any note on opens it, it releases when all held notes are off. `voices` is a polyphonic oscillator bank added into x. Params: attack/decay/release in samples, sustain 0-1, `waveform` (0 sine, 1 saw, 2 square, 3 triangle), `sampleRate`; `voiceCount` (1-64) is fixed at compile.
+- `wavy::AudioEngine::sendEvent` queues events through a lock-free ring (one producer thread); `wavy::MidiInput` feeds it from a winmm device. Hardware events carry no timestamp mapping yet, so they land at the start of the next block.
+
 ## Events, feedback, swaps
 
 - **MIDI/events**: a fixed-capacity `EventBuffer` per block (offset, status, data) delivered to event-consuming steps.

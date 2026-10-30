@@ -35,6 +35,11 @@ public:
     // for a node or index the running program does not have are ignored.
     bool setParam(jitnodes::NodeId node, size_t index, float value);
 
+    // Queues a MIDI-style channel message for the next block, at `frameOffset` inside it (clamped to the block). Events reach the steps that
+    // handle them (adsr, voices) in offset order. False when the ring is full. Like setParam, one producer thread at a time: the MIDI
+    // callback thread or the main thread, not both.
+    bool sendEvent(uint8_t status, uint8_t data1, uint8_t data2, uint32_t frameOffset = 0);
+
     // Frees programs the audio thread has replaced. Returns how many.
     size_t collectRetired();
 
@@ -49,6 +54,9 @@ private:
     };
 
     void renderBlock() noexcept;
+
+    SpscRing<jitnodes::AudioEvent, 1024> events_;
+    jitnodes::EventBuffer blockEvents_;  // audio thread
 
     size_t blockSize_ = 0;
     size_t outputCount_ = 0;

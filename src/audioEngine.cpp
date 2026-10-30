@@ -40,6 +40,15 @@ bool AudioEngine::setParam(jitnodes::NodeId node, size_t index, float value) {
     return params_.push({node, static_cast<uint32_t>(index), value});
 }
 
+bool AudioEngine::sendEvent(uint8_t status, uint8_t data1, uint8_t data2, uint32_t frameOffset) {
+    jitnodes::AudioEvent e;
+    e.offset = static_cast<uint32_t>(std::min<size_t>(frameOffset, blockSize_ - 1));
+    e.status = status;
+    e.data1 = data1;
+    e.data2 = data2;
+    return events_.push(e);
+}
+
 size_t AudioEngine::collectRetired() {
     size_t freed = 0;
     AudioProgram* program = nullptr;
@@ -65,9 +74,14 @@ void AudioEngine::renderBlock() noexcept {
     while (params_.pop(change))
         if (float* p = current_->tryParam(change.node, change.index)) *p = change.value;
 
-    current_->process(blockPtrs_.data());
+    blockEvents_.clear();
+    jitnodes::AudioEvent event;
+    while (events_.pop(event))
+        if (!blockEvents_.push(event)) break;
+
+    current_->process(blockPtrs_.data(), &blockEvents_);
     if (fading) {
-        fading->process(fadePtrs_.data());
+        fading->process(fadePtrs_.data(), &blockEvents_);
         const float step = 1.0f / static_cast<float>(blockSize_);
         for (size_t c = 0; c < outputCount_; ++c) {
             float* to = blockPtrs_[c];
