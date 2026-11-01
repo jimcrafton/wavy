@@ -64,7 +64,9 @@ if(WIN32)
     INTERFACE_LINK_LIBRARIES newui::newui)
 endif()
 
-set(wavyVersionHeader "${CMAKE_BINARY_DIR}/include/wavy/version.h")
+include(cmake/vst3Hosting.cmake)
+
+set(wavyVersionHeader"${CMAKE_BINARY_DIR}/include/wavy/version.h")
 add_custom_target(wavy_version
   COMMAND ${CMAKE_COMMAND}
     -DINITIAL_MAJOR=${wavy_VERSION_MAJOR}
@@ -83,6 +85,13 @@ if(WIN32)
   target_link_libraries(wavyCore PRIVATE Winmm.lib)
 endif()
 add_library(wavy::core ALIAS wavyCore)
+if(TARGET vst3::hosting)
+  target_sources(wavyCore PRIVATE src/vstPlugin.cpp)
+  target_link_libraries(wavyCore PRIVATE vst3::hosting)
+  target_compile_definitions(wavyCore PUBLIC WAVY_HAS_VST3)
+  add_executable(vstProbe src/vstProbe.cpp)
+  target_link_libraries(vstProbe PRIVATE wavy::core vst3::hosting)
+endif()
 
 # The Steinberg ASIO SDK is never vendored (its license forbids redistribution): point at a local copy to build the ASIO backend.
 set(ASIO_SDK_DIR "$ENV{ASIO_SDK_DIR}" CACHE PATH "Steinberg ASIO SDK root (contains common/ and host/)")

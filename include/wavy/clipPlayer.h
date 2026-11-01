@@ -30,15 +30,17 @@ class ClipPlayer {
 public:
     static constexpr size_t maxClips = 64;
 
-    // `blockSize` is the block size of every clip program (a multiple of 16).
-    explicit ClipPlayer(size_t blockSize = 128);
+    // `blockSize` is the block size of every clip program (a multiple of 16). `channels` (1 or 2) is the player's output width: a mono clip
+    // feeds every channel, a stereo clip (outputs x, r) needs a stereo player.
+    explicit ClipPlayer(size_t blockSize = 128, size_t channels = 1);
     ~ClipPlayer();
     ClipPlayer(const ClipPlayer&) = delete;
     ClipPlayer& operator=(const ClipPlayer&) = delete;
 
     size_t blockSize() const { return blockSize_; }
+    size_t channels() const { return channels_; }
 
-    // `program` must have this player's block size and one output; it is warmed here. `events` must be sorted by frame. Returns the
+    // `program` must have this player's block size and one output (or two, on a stereo player); it is warmed here. `events` must be sorted by frame. Returns the
     // clip's index, or -1 when the player is full. Throws std::invalid_argument for a mismatched program.
     int addClip(uint64_t startFrame, uint64_t lengthFrames, std::unique_ptr<jitnodes::AudioProgram> program, float gain = 1.0f,
                 std::vector<ClipEvent> events = {});
@@ -61,16 +63,21 @@ public:
     // Largest absolute output sample since the last call.
     float takePeak() { return peak_.exchange(0.0f, std::memory_order_acq_rel); }
 
-    // Writes `frames` mono samples (silence while stopped). Any frame count works.
+    // Writes `frames` mono samples (silence while stopped). Any frame count works. On a stereo player this writes the left channel.
     void render(float* out, size_t frames) noexcept;
+
+    // Writes `frames` samples to out[0..channels()).
+    void render(float* const* out, size_t frames) noexcept;
 
 private:
     struct Clip;
+    void renderChannels(float* const* out, size_t outCount, size_t frames) noexcept;
     void renderBlock() noexcept;
     void mixClip(Clip& clip) noexcept;
     static void ensureBlock(Clip& clip, int64_t block, size_t blockSize) noexcept;
 
     size_t blockSize_;
+    size_t channels_;
     std::array<std::atomic<Clip*>, maxClips> slots_{};
     std::vector<std::unique_ptr<Clip>> owned_;  // main thread
     size_t count_ = 0;
@@ -88,7 +95,7 @@ private:
     std::atomic<uint64_t> position_{0};
     std::atomic<float> peak_{0.0f};
 
-    std::vector<float> block_;  // the mixed block being served
+    std::vector<float> block_;  // the mixed block being served, channel c at c * blockSize_
     size_t served_;             // frames of block_ already handed out; blockSize_ means "render another"
     uint64_t nextStart_ = 0;    // timeline frame of the next block to render
     bool wasPlaying_ = false;

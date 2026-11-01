@@ -231,3 +231,64 @@ TEST(ClipPlayer, ParameterWritesApplyAtTheNextBlockOfThatClipOnly) {
     EXPECT_FLOAT_EQ(out[0], 1.25f);
     EXPECT_FLOAT_EQ(out[255], 1.25f);
 }
+
+namespace {
+
+std::unique_ptr<AudioProgram> constantStereoProgram(float left, float right) {
+    Network net;
+    const NodeId line = net.addNode("line");
+    net.node(line).setFloat("count", static_cast<float>(block));
+    const NodeId levels = net.addNode("wrangle");
+    net.node(levels).setString("code", "x = a; r = b;");
+    net.connect(line, levels);
+    auto program = AudioProgram::compile(net, levels, {block, {"x", "r"}});
+    program->param(levels, 0) = left;
+    program->param(levels, 1) = right;
+    return program;
+}
+
+}  // namespace
+
+TEST(ClipPlayerStereo, StereoClipsKeepTheirSidesAndMonoClipsFeedBoth) {
+    ClipPlayer player(block, 2);
+    EXPECT_EQ(player.channels(), 2u);
+    player.addClip(0, 1000, constantStereoProgram(0.5f, -0.25f));
+    player.addClip(0, 1000, oscProgram(0.0f), 1.0f);
+    player.play();
+
+    std::vector<float> l(700), r(700);
+    for (size_t at = 0; at < 700; at += 100) {
+        float* out[] = {l.data() + at, r.data() + at};
+        player.render(out, 100);
+    }
+    for (size_t i = 0; i < 700; ++i) {
+        // oscProgram(0 Hz) is sin(0) = 0, so only the stereo clip is audible, on its own side.
+        ASSERT_NEAR(l[i], 0.5f, 1e-6f);
+        ASSERT_NEAR(r[i], -0.25f, 1e-6f);
+    }
+}
+
+TEST(ClipPlayerStereo, RejectsStereoClipsOnAMonoPlayer) {
+    ClipPlayer mono(block);
+    EXPECT_THROW(mono.addClip(0, 100, constantStereoProgram(1.0f, 1.0f)), std::invalid_argument);
+    EXPECT_THROW(ClipPlayer(block, 3), std::invalid_argument);
+}
+
+TEST(ClipPlayerStereo, MonoClipOnAStereoPlayerIsCentred) {
+    ClipPlayer player(block, 2);
+    Network net;
+    const NodeId line = net.addNode("line");
+    net.node(line).setFloat("count", static_cast<float>(block));
+    const NodeId level = net.addNode("wrangle");
+    net.node(level).setString("code", "x = a;");
+    net.connect(line, level);
+    auto program = AudioProgram::compile(net, level, {block, {"x"}});
+    program->param(level, 0) = 0.3f;
+    player.addClip(0, 400, std::move(program));
+    player.play();
+    std::vector<float> l(256), r(256);
+    float* out[] = {l.data(), r.data()};
+    player.render(out, 256);
+    EXPECT_FLOAT_EQ(l[200], 0.3f);
+    EXPECT_FLOAT_EQ(r[200], 0.3f);
+}

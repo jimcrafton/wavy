@@ -5,3 +5,6 @@
 	path = 3rdparty/jitnodes
 	url = https://github.com/jimcrafton/jitnodes
 	branch = audio
+[submodule "3rdparty/vst3sdk"]
+	path = 3rdparty/vst3sdk
+	url = https://github.com/steinbergmedia/vst3sdk

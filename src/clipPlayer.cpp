@@ -16,11 +16,14 @@ struct ClipPlayer::Clip {
     std::vector<ClipEvent> events;
     size_t nextEvent = 0;
     int64_t loaded = -1;  // highest clip block rendered; -1 = none, the program starts from reset state
-    std::vector<float> blocks[2];  // clip block k lives in blocks[k & 1]
+    size_t channels = 1;
+    std::vector<float> blocks[2];  // clip block k lives in blocks[k & 1], channel c at c * blockSize
 };
 
-ClipPlayer::ClipPlayer(size_t blockSize) : blockSize_(blockSize), block_(blockSize, 0.0f), served_(blockSize) {
+ClipPlayer::ClipPlayer(size_t blockSize, size_t channels)
+    : blockSize_(blockSize), channels_(channels), block_(blockSize * (channels == 2 ? 2 : 1), 0.0f), served_(blockSize) {
     if (blockSize == 0 || blockSize % 16 != 0) throw std::invalid_argument("ClipPlayer: block size must be a multiple of 16");
+    if (channels != 1 && channels != 2) throw std::invalid_argument("ClipPlayer: channels must be 1 or 2");
     for (auto& s : slots_) s.store(nullptr);
 }
 
@@ -28,8 +31,8 @@ ClipPlayer::~ClipPlayer() = default;
 
 int ClipPlayer::addClip(uint64_t startFrame, uint64_t lengthFrames, std::unique_ptr<jitnodes::AudioProgram> program, float gain,
                         std::vector<ClipEvent> events) {
-    if (!program || program->blockSize() != blockSize_ || program->outputCount() != 1)
-        throw std::invalid_argument("ClipPlayer::addClip: program needs this player's block size and one output");
+    if (!program || program->blockSize() != blockSize_ || program->outputCount() < 1 || program->outputCount() > channels_)
+        throw std::invalid_argument("ClipPlayer::addClip: program needs this player's block size and one output (two on a stereo player)");
     if (count_ == maxClips) return -1;
 
     auto clip = std::make_unique<Clip>();
@@ -37,8 +40,9 @@ int ClipPlayer::addClip(uint64_t startFrame, uint64_t lengthFrames, std::unique_
     clip->length = lengthFrames;
     clip->gain = gain;
     clip->events = std::move(events);
-    clip->blocks[0].assign(blockSize_, 0.0f);
-    clip->blocks[1].assign(blockSize_, 0.0f);
+    clip->channels = program->outputCount();
+    clip->blocks[0].assign(blockSize_ * clip->channels, 0.0f);
+    clip->blocks[1].assign(blockSize_ * clip->channels, 0.0f);
     clip->program = std::move(program);
     clip->program->warm();
     clip->program->resetState();
@@ -70,7 +74,8 @@ void ClipPlayer::ensureBlock(Clip& clip, int64_t block, size_t blockSize) noexce
             const ClipEvent& e = clip.events[clip.nextEvent++];
             if (e.frame >= from) events.push({static_cast<uint32_t>(e.frame - from), e.status, e.data1, e.data2});
         }
-        float* out[] = {clip.blocks[j & 1].data()};
+        float* base = clip.blocks[j & 1].data();
+        float* out[] = {base, base + blockSize};
         clip.program->process(out, &events);
         clip.loaded = j;
     }
@@ -82,9 +87,12 @@ void ClipPlayer::mixClip(Clip& clip) noexcept {
     const uint64_t to = std::min(end, clip.start + clip.length);
     if (from >= to) return;
     ensureBlock(clip, static_cast<int64_t>((to - 1 - clip.start) / blockSize_), blockSize_);
-    for (uint64_t t = from; t < to; ++t) {
-        const uint64_t c = t - clip.start;
-        block_[t - nextStart_] += clip.blocks[(c / blockSize_) & 1][c % blockSize_] * clip.gain;
+    for (size_t ch = 0; ch < channels_; ++ch) {
+        const size_t source = std::min(ch, clip.channels - 1);
+        for (uint64_t t = from; t < to; ++t) {
+            const uint64_t c = t - clip.start;
+            block_[ch * blockSize_ + (t - nextStart_)] += clip.blocks[(c / blockSize_) & 1][source * blockSize_ + c % blockSize_] * clip.gain;
+        }
     }
 }
 
@@ -110,6 +118,13 @@ void ClipPlayer::renderBlock() noexcept {
 }
 
 void ClipPlayer::render(float* out, size_t frames) noexcept {
+    float* outs[] = {out};
+    renderChannels(outs, 1, frames);
+}
+
+void ClipPlayer::render(float* const* out, size_t frames) noexcept { renderChannels(out, channels_, frames); }
+
+void ClipPlayer::renderChannels(float* const* out, size_t outCount, size_t frames) noexcept {
     const int64_t target = seek_.exchange(-1, std::memory_order_acq_rel);
     if (target >= 0) {
         nextStart_ = static_cast<uint64_t>(target);
@@ -128,20 +143,28 @@ void ClipPlayer::render(float* out, size_t frames) noexcept {
             wasPlaying_ = false;
             position_.store(nextStart_, std::memory_order_release);
         }
-        std::fill(out, out + frames, 0.0f);
+        for (size_t ch = 0; ch < outCount; ++ch) {
+            std::fill(out[ch], out[ch] + frames, 0.0f);
+        }
         return;
     }
     wasPlaying_ = true;
 
+    const size_t written = std::min(outCount, channels_);
     float peak = 0.0f;
     size_t done = 0;
     while (done < frames) {
         if (served_ == blockSize_) renderBlock();
         const size_t n = std::min(frames - done, blockSize_ - served_);
-        for (size_t i = 0; i < n; ++i) {
-            const float v = block_[served_ + i];
-            out[done + i] = v;
-            peak = std::max(peak, std::abs(v));
+        for (size_t ch = 0; ch < written; ++ch) {
+            const float* source = block_.data() + ch * blockSize_ + served_;
+            for (size_t i = 0; i < n; ++i) {
+                out[ch][done + i] = source[i];
+                peak = std::max(peak, std::abs(source[i]));
+            }
+        }
+        for (size_t ch = written; ch < outCount; ++ch) {
+            std::fill(out[ch] + done, out[ch] + done + n, 0.0f);
         }
         served_ += n;
         done += n;
