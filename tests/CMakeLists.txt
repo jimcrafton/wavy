@@ -28,7 +28,7 @@ if(TARGET vst3::hosting)
     target_compile_options(wavyChaos PRIVATE /W0 /utf-8 /EHsc)
   endif()
 
-  target_sources(wavy_tests PRIVATE test_vstPlugin.cpp test_vstChaos.cpp)
+  target_sources(wavy_tests PRIVATE test_vstPlugin.cpp test_vstChaos.cpp test_pluginHost.cpp)
   target_compile_definitions(wavy_tests PRIVATE WAVY_CHAOS_PATH="$<TARGET_FILE:wavyChaos>")
   add_dependencies(wavy_tests wavyChaos)
 endif()

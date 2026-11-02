@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "jitnodes/audio/audioProgram.h"
+#include "jitnodes/audio/externalProcessor.h"
 #include "wavy/spscRing.h"
 
 namespace wavy {
@@ -42,10 +43,27 @@ public:
 
     // `program` must have this player's block size and one output (or two, on a stereo player); it is warmed here. `events` must be sorted by frame. Returns the
     // clip's index, or -1 when the player is full. Throws std::invalid_argument for a mismatched program.
+    //
+    // `track` (-1 = none) names a track that has, or later gets, a program from setTrackProgram(): the clip's audio is then summed into
+    // that track's input instead of the master mix.
     int addClip(uint64_t startFrame, uint64_t lengthFrames, std::unique_ptr<jitnodes::AudioProgram> program, float gain = 1.0f,
-                std::vector<ClipEvent> events = {});
+                std::vector<ClipEvent> events = {}, int track = -1);
 
-    // Frees every clip. Only while the device is not streaming.
+    // A clip that is only events (a MIDI clip): they go to the program of `track`, which must be a valid track number. Sorted by frame,
+    // relative to the clip start. Notes still held when the clip ends or the playhead moves are released through the track's processors.
+    int addEventClip(int track, uint64_t startFrame, uint64_t lengthFrames, std::vector<ClipEvent> events);
+
+    static constexpr int maxTracks = 16;
+
+    // Gives `track` a long-lived stereo program (two outputs, one block size, hostInput reading the track's summed clips). Unlike a clip's
+    // program it is never reset at a clip boundary, runs for as long as the player is asked to render (also while stopped, so a plugin's
+    // tail rings out) and is mixed into the master. `processors` are the external processors inside it; the player calls their reset() at
+    // stop and seek. Throws std::invalid_argument for a bad track or program. Not while streaming.
+    void setTrackProgram(int track, std::unique_ptr<jitnodes::AudioProgram> program,
+                         std::vector<std::shared_ptr<jitnodes::ExternalProcessor>> processors = {});
+    bool hasTrackProgram(int track) const;
+
+    // Frees every clip and track program. Only while the device is not streaming.
     void clear();
     size_t clipCount() const { return count_; }
 
@@ -71,9 +89,11 @@ public:
 
 private:
     struct Clip;
+    struct Track;
     void renderChannels(float* const* out, size_t outCount, size_t frames) noexcept;
-    void renderBlock() noexcept;
+    void renderBlock(bool playing) noexcept;
     void mixClip(Clip& clip) noexcept;
+    void runTracks(bool release) noexcept;
     static void ensureBlock(Clip& clip, int64_t block, size_t blockSize) noexcept;
 
     size_t blockSize_;
@@ -81,6 +101,11 @@ private:
     std::array<std::atomic<Clip*>, maxClips> slots_{};
     std::vector<std::unique_ptr<Clip>> owned_;  // main thread
     size_t count_ = 0;
+
+    std::array<std::atomic<Track*>, maxTracks> tracks_{};
+    std::vector<std::unique_ptr<Track>> ownedTracks_;  // main thread
+    std::atomic<bool> hasTracks_{false};
+    bool releaseTracks_ = false;  // audio thread: reset the tracks' processors at the next block
 
     struct ParamChange {
         int32_t clip;

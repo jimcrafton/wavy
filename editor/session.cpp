@@ -129,14 +129,65 @@ std::vector<wavy::ClipEvent> makeArpEvents(uint64_t framesPerBeat, int bars, std
     return events;
 }
 
-Session::Session(double sampleRate) : sampleRate_(sampleRate), player_(blockSize) {
+Session::Session(double sampleRate)
+    : sampleRate_(sampleRate),
+#ifdef WAVY_HAS_VST3
+      plugins_(sampleRate, static_cast<int>(blockSize)),
+#endif
+      player_(blockSize, 2) {
     tracks_ = {{"Drums", 0xd98a5f, 0x4a3022}, {"Bass", 0x6c8cf0, 0x27335e}, {"Pad", 0x5fc7a0, 0x1f4a3a}, {"Arp", 0xe05fa8, 0x5a2442}};
+#ifdef WAVY_HAS_VST3
+    instruments_.resize(tracks_.size());
+#endif
+}
+
+bool Session::setTrackInstrument(int track, const std::string& path, std::string& error) {
+#ifdef WAVY_HAS_VST3
+    if (track < 0 || static_cast<size_t>(track) >= tracks_.size()) {
+        error = "no such track";
+        return false;
+    }
+    const std::string name = "track" + std::to_string(track);
+    auto processor = plugins_.add(name, path, 0, error);
+    if (!processor) return false;
+    if (!processor->isInstrument()) {
+        plugins_.remove(name);
+        error = "the plugin is not an instrument";
+        return false;
+    }
+    try {
+        player_.setTrackProgram(track, wavy::makePluginTrackProgram(name, blockSize), {processor});
+    } catch (const std::exception& e) {
+        plugins_.remove(name);
+        error = e.what();
+        return false;
+    }
+    instruments_[static_cast<size_t>(track)] = std::filesystem::path(path).stem().string();
+    return true;
+#else
+    (void)track;
+    (void)path;
+    error = "built without VST3 hosting";
+    return false;
+#endif
+}
+
+std::string Session::instrumentName(int track) const {
+#ifdef WAVY_HAS_VST3
+    if (track >= 0 && static_cast<size_t>(track) < instruments_.size()) return instruments_[static_cast<size_t>(track)];
+#else
+    (void)track;
+#endif
+    return {};
 }
 
 int Session::finish(ClipInfo info, std::unique_ptr<jitnodes::AudioProgram> program, float gain, std::vector<wavy::ClipEvent> events,
                     std::string& error) {
     try {
-        if (player_.addClip(info.start, info.length, std::move(program), gain, std::move(events)) < 0) {
+        const int track = player_.hasTrackProgram(info.track) ? info.track : -1;
+        const int added = program ? player_.addClip(info.start, info.length, std::move(program), gain, std::move(events), track)
+                                  : player_.addEventClip(info.track, info.start, info.length, std::move(events));
+        if (added < 0) {
             error = "no room for another clip";
             return -1;
         }
@@ -241,7 +292,9 @@ int Session::addNotesClip(int track, uint64_t startFrame, int bars, std::string&
         info.start = startFrame;
         info.length = static_cast<uint64_t>(bars) * framesPerBar();
         auto events = makeArpEvents(framesPerBeat(), bars, &info.notes);
-        return finish(std::move(info), makeInstrumentProgram(sampleRate_, blockSize), 1.0f, std::move(events), error);
+        // On a track with a plugin the clip is only events; the plugin's track program plays them.
+        auto program = player_.hasTrackProgram(track) ? nullptr : makeInstrumentProgram(sampleRate_, blockSize);
+        return finish(std::move(info), std::move(program), 1.0f, std::move(events), error);
     } catch (const std::exception& e) {
         error = e.what();
         return -1;

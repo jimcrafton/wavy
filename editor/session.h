@@ -8,6 +8,9 @@
 
 #include "jitnodes/audio/audioProgram.h"
 #include "wavy/clipPlayer.h"
+#ifdef WAVY_HAS_VST3
+#include "wavy/pluginHost.h"
+#endif
 
 namespace wavy::editor {
 
@@ -90,6 +93,12 @@ public:
     int addGraphClip(int track, uint64_t startFrame, int bars, std::string& error);
     int addNotesClip(int track, uint64_t startFrame, int bars, std::string& error);
 
+    // Loads the VST3 instrument at `path` onto `track`: MIDI clips added to it afterwards drive the plugin through the track's long-lived
+    // program instead of the built-in voices. Only before streaming starts. False with `error` filled in.
+    bool setTrackInstrument(int track, const std::string& path, std::string& error);
+    // Name of the track's plugin, or empty.
+    std::string instrumentName(int track) const;
+
     // Clip under the timeline frame on a track, or -1.
     int clipAt(int track, uint64_t frame) const;
 
@@ -108,6 +117,10 @@ private:
     double bpm_ = 120.0;
     std::vector<TrackInfo> tracks_;
     std::vector<ClipInfo> clips_;
+#ifdef WAVY_HAS_VST3
+    wavy::PluginHost plugins_;
+    std::vector<std::string> instruments_;  // per track
+#endif
     wavy::ClipPlayer player_;
     int sampleCount_ = 0;
 };

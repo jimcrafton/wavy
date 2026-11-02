@@ -80,8 +80,12 @@ struct Audio {
         const uint32_t channels = info.outputChannels;
         device->start([&session, channels](float* const* out, uint32_t frames) {
             ++audioCallbacks;
-            session.player().render(out[0], frames);
-            for (uint32_t c = 1; c < channels; ++c) std::copy(out[0], out[0] + frames, out[c]);
+            if (channels >= 2) {
+                session.player().render(out, frames);
+                for (uint32_t c = 2; c < channels; ++c) std::copy(out[0], out[0] + frames, out[c]);
+            } else {
+                session.player().render(out[0], frames);
+            }
         });
         started = true;
     }
@@ -406,12 +410,20 @@ int main(int argc, char** argv) {
     window.patch = fill<PatchCanvas>(window.root, "detailCanvas", state);
 
     std::string error;
+    std::string instrumentNote;
+    if (!checkOnly) {
+        // Surge XT plays the Arp track when it is installed; otherwise the clip uses the built-in voices.
+        const std::string surge = PluginHost::commonVst3Path("Surge Synth Team/Surge XT.vst3/Contents/x86_64-win/Surge XT.vst3");
+        if (surge.empty()) instrumentNote = " Surge XT not found: the Arp uses the built-in voices.";
+        else if (!session.setTrackInstrument(3, surge, error)) instrumentNote = " Surge XT failed to load (" + error + "): the Arp uses the built-in voices.";
+        else instrumentNote = " The Arp track plays Surge XT.";
+    }
     state.clip = session.addGraphClip(2, 0, 4, error);
     if (state.clip < 0) std::fprintf(stderr, "drone: %s\n", error.c_str());
     if (session.addNotesClip(3, 2 * session.framesPerBar(), 4, error) < 0) std::fprintf(stderr, "arp: %s\n", error.c_str());
     if (!wavPath.empty() && session.addSampleClip(0, 0, wavPath, error) < 0) std::fprintf(stderr, "%s: %s\n", wavPath.c_str(), error.c_str());
     state.track = 2;
-    window.status(audio.status + ". Press Play; pick a track, then add a clip at the playhead.");
+    window.status(audio.status + "." + instrumentNote + " Press Play; pick a track, then add a clip at the playhead.");
 
     if (checkOnly) return selfCheck(window, session, state) ? 0 : 1;
 
