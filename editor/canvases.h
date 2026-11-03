@@ -12,6 +12,8 @@
 namespace wavy::editor {
 
 constexpr float laneHeight = 72.0f;
+constexpr float editButtonWidth = 44.0f;
+constexpr float effectButtonTop = 30.0f;  // inside a lane: the Edit button sits above this line, the FX button below
 
 // What the canvases share: the session, what is selected and the horizontal scale.
 struct EditorState {
@@ -20,6 +22,8 @@ struct EditorState {
     int clip = -1;
     float pixelsPerBar = 56.0f;
     std::function<void()> changed;  // selection changed; the window redraws everything
+    std::function<void(int)> openEditor;  // the Edit button of a track header with a plugin
+    std::function<void(int, int)> openEffectEditor;  // the FX button below it: track, effect index
 
     explicit EditorState(Session& s) : session(s) {}
     float pixelsPerFrame() const { return pixelsPerBar / static_cast<float>(session.framesPerBar()); }
@@ -56,7 +60,13 @@ public:
     void paint(BLContext& ctx) override;
 
 private:
+    enum class Drag { none, volume, pan };
+    bool hitStrip(const newui::Point& p, bool reset);
+    void dragTo(float x);
+
     EditorState& state_;
+    Drag drag_ = Drag::none;
+    int dragTrack_ = 0;
 };
 
 // The node graph of the selected graph clip, read-only.

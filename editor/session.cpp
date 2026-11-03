@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 
 #include "jitnodes/jitnodes.h"
 #include "wavy/wavLoader.h"
@@ -138,28 +140,55 @@ Session::Session(double sampleRate)
     tracks_ = {{"Drums", 0xd98a5f, 0x4a3022}, {"Bass", 0x6c8cf0, 0x27335e}, {"Pad", 0x5fc7a0, 0x1f4a3a}, {"Arp", 0xe05fa8, 0x5a2442}};
 #ifdef WAVY_HAS_VST3
     instruments_.resize(tracks_.size());
+    chains_.resize(tracks_.size());
 #endif
+    player_.setTempo(bpm_);
+    player_.enableMasterLimiter(sampleRate_);
 }
 
-bool Session::setTrackInstrument(int track, const std::string& path, std::string& error) {
+#ifdef WAVY_HAS_VST3
+namespace {
+
+// Whether class `classIndex` of the module at `path` is an instrument, read from the factory before anything is changed.
+bool classIsInstrument(const std::string& path, size_t classIndex, bool& instrument, std::string& error) {
+    auto module = wavy::VstModule::load(path, error);
+    if (!module) return false;
+    if (classIndex >= module->classes().size()) {
+        error = "no such plugin class";
+        return false;
+    }
+    instrument = module->classes()[classIndex].isInstrument();
+    return true;
+}
+
+}  // namespace
+#endif
+
+bool Session::setTrackInstrument(int track, const std::string& path, std::string& error, size_t classIndex) {
 #ifdef WAVY_HAS_VST3
     if (track < 0 || static_cast<size_t>(track) >= tracks_.size()) {
         error = "no such track";
         return false;
     }
-    const std::string name = "track" + std::to_string(track);
-    auto processor = plugins_.add(name, path, 0, error);
-    if (!processor) return false;
-    if (!processor->isInstrument()) {
-        plugins_.remove(name);
+    bool instrument = false;
+    if (!classIsInstrument(path, classIndex, instrument, error)) return false;
+    if (!instrument) {
         error = "the plugin is not an instrument";
         return false;
     }
-    try {
-        player_.setTrackProgram(track, wavy::makePluginTrackProgram(name, blockSize), {processor});
-    } catch (const std::exception& e) {
-        plugins_.remove(name);
-        error = e.what();
+    const std::string name = "track" + std::to_string(track);
+    auto& chain = chains_[static_cast<size_t>(track)];
+    const bool replacing = !instruments_[static_cast<size_t>(track)].empty();
+    // The old instrument's window is closed first: it must not outlive the plugin it shows.
+    editors_.erase(name);
+    auto processor = plugins_.add(name, path, classIndex, error);
+    if (!processor) return false;
+    if (!replacing) chain.insert(chain.begin(), name);
+    if (!rebuildTrack(track, error)) {
+        if (!replacing) {
+            chain.erase(chain.begin());
+            plugins_.remove(name);
+        }
         return false;
     }
     instruments_[static_cast<size_t>(track)] = std::filesystem::path(path).stem().string();
@@ -167,8 +196,76 @@ bool Session::setTrackInstrument(int track, const std::string& path, std::string
 #else
     (void)track;
     (void)path;
+    (void)classIndex;
     error = "built without VST3 hosting";
     return false;
+#endif
+}
+
+bool Session::addTrackEffect(int track, const std::string& path, std::string& error, size_t classIndex) {
+#ifdef WAVY_HAS_VST3
+    if (track < 0 || static_cast<size_t>(track) >= tracks_.size()) {
+        error = "no such track";
+        return false;
+    }
+    bool instrument = false;
+    if (!classIsInstrument(path, classIndex, instrument, error)) return false;
+    if (instrument) {
+        error = "the plugin is an instrument, not an effect";
+        return false;
+    }
+    auto& chain = chains_[static_cast<size_t>(track)];
+    const std::string name = "track" + std::to_string(track) + "fx" + std::to_string(effectCounter_++);
+    auto processor = plugins_.add(name, path, classIndex, error);
+    if (!processor) return false;
+    chain.push_back(name);
+    if (!rebuildTrack(track, error)) {
+        chain.pop_back();
+        plugins_.remove(name);
+        return false;
+    }
+    effectStems_[name] = std::filesystem::path(path).stem().string();
+    return true;
+#else
+    (void)track;
+    (void)path;
+    (void)classIndex;
+    error = "built without VST3 hosting";
+    return false;
+#endif
+}
+
+int Session::effectCount(int track) const {
+#ifdef WAVY_HAS_VST3
+    if (track < 0 || static_cast<size_t>(track) >= chains_.size()) return 0;
+    const auto& chain = chains_[static_cast<size_t>(track)];
+    return static_cast<int>(chain.size()) - (instruments_[static_cast<size_t>(track)].empty() ? 0 : 1);
+#else
+    (void)track;
+    return 0;
+#endif
+}
+
+#ifdef WAVY_HAS_VST3
+bool Session::rebuildTrack(int track, std::string& error) {
+    const auto& chain = chains_[static_cast<size_t>(track)];
+    std::vector<std::shared_ptr<jitnodes::ExternalProcessor>> processors;
+    for (const std::string& name : chain) {
+        processors.push_back(plugins_.find(name));
+    }
+    try {
+        player_.setTrackProgram(track, wavy::makePluginTrackProgram(chain, blockSize), std::move(processors));
+    } catch (const std::exception& e) {
+        error = e.what();
+        return false;
+    }
+    return true;
+}
+#endif
+
+void Session::pollPlugins() {
+#ifdef WAVY_HAS_VST3
+    if (plugins_.pollRestarts()) player_.updateLatencyCompensation();
 #endif
 }
 
@@ -181,11 +278,197 @@ std::string Session::instrumentName(int track) const {
     return {};
 }
 
+bool Session::openInstrumentEditor(int track, std::string& error) {
+#ifdef WAVY_HAS_VST3
+    if (track < 0 || static_cast<size_t>(track) >= tracks_.size()) {
+        error = "no such track";
+        return false;
+    }
+    return openEditorFor("track" + std::to_string(track), error);
+#else
+    (void)track;
+    error = "built without VST3 hosting";
+    return false;
+#endif
+}
+
+bool Session::openEffectEditor(int track, int index, std::string& error) {
+#ifdef WAVY_HAS_VST3
+    if (track < 0 || static_cast<size_t>(track) >= tracks_.size() || index < 0 || index >= effectCount(track)) {
+        error = "no such effect";
+        return false;
+    }
+    const auto& chain = chains_[static_cast<size_t>(track)];
+    const size_t first = instruments_[static_cast<size_t>(track)].empty() ? 0 : 1;
+    return openEditorFor(chain[first + static_cast<size_t>(index)], error);
+#else
+    (void)track;
+    (void)index;
+    error = "built without VST3 hosting";
+    return false;
+#endif
+}
+
+#ifdef WAVY_HAS_VST3
+bool Session::openEditorFor(const std::string& processorName, std::string& error) {
+    auto processor = plugins_.find(processorName);
+    if (!processor) {
+        error = "this track has no plugin";
+        return false;
+    }
+    auto& slot = editors_[processorName];
+    if (slot && slot->isOpen()) {
+        slot->bringToFront();
+        return true;
+    }
+    slot = wavy::PluginEditorWindow::open(processor->plugin(), error, editorOwner_);
+    return slot != nullptr;
+}
+#endif
+
+namespace {
+
+constexpr uint32_t stateMagic = 0x54535657;  // "WVST"
+constexpr uint32_t stateVersion = 2;
+
+void put32(std::vector<uint8_t>& out, uint32_t v) {
+    for (int i = 0; i < 4; ++i) out.push_back(static_cast<uint8_t>(v >> (8 * i)));
+}
+
+bool get32(const std::vector<uint8_t>& in, size_t& pos, uint32_t& v) {
+    if (pos + 4 > in.size()) return false;
+    v = 0;
+    for (size_t i = 0; i < 4; ++i) v |= static_cast<uint32_t>(in[pos + i]) << (8 * i);
+    pos += 4;
+    return true;
+}
+
+}  // namespace
+
+bool Session::saveInstrumentStates(const std::string& path, std::string& error) {
+#ifdef WAVY_HAS_VST3
+    std::vector<uint8_t> file;
+    put32(file, stateMagic);
+    put32(file, stateVersion);
+    size_t countAt = file.size();
+    put32(file, 0);
+    uint32_t count = 0;
+    auto putString = [&file](const std::string& s) {
+        put32(file, static_cast<uint32_t>(s.size()));
+        file.insert(file.end(), s.begin(), s.end());
+    };
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        for (const std::string& processorName : chains_[t]) {
+            auto processor = plugins_.find(processorName);
+            if (!processor) {
+                continue;
+            }
+            const std::vector<uint8_t> blob = processor->plugin().saveState();
+            if (blob.empty()) {
+                continue;
+            }
+            const auto effect = effectStems_.find(processorName);
+            putString(processorName);
+            putString(effect != effectStems_.end() ? effect->second : instruments_[t]);
+            put32(file, static_cast<uint32_t>(blob.size()));
+            file.insert(file.end(), blob.begin(), blob.end());
+            ++count;
+        }
+    }
+    for (size_t i = 0; i < 4; ++i) file[countAt + i] = static_cast<uint8_t>(count >> (8 * i));
+
+    std::error_code ec;
+    const std::filesystem::path target(path);
+    if (target.has_parent_path()) std::filesystem::create_directories(target.parent_path(), ec);
+    std::ofstream out(target, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        error = "cannot write " + path;
+        return false;
+    }
+    out.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(file.size()));
+    if (!out) {
+        error = "short write to " + path;
+        return false;
+    }
+    return true;
+#else
+    (void)path;
+    error = "built without VST3 hosting";
+    return false;
+#endif
+}
+
+int Session::loadInstrumentStates(const std::string& path, std::string& error) {
+#ifdef WAVY_HAS_VST3
+    std::ifstream in(std::filesystem::path(path), std::ios::binary);
+    if (!in) return 0;
+    const std::vector<uint8_t> file((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+    size_t pos = 0;
+    uint32_t magic = 0, version = 0, count = 0;
+    if (!get32(file, pos, magic) || magic != stateMagic || !get32(file, pos, version) || version < 1 || version > stateVersion ||
+        !get32(file, pos, count)) {
+        error = path + " is not a wavy state file";
+        return 0;
+    }
+    auto getString = [&](std::string& s) {
+        uint32_t size = 0;
+        if (!get32(file, pos, size) || pos + size > file.size()) {
+            return false;
+        }
+        s.assign(file.begin() + static_cast<std::ptrdiff_t>(pos), file.begin() + static_cast<std::ptrdiff_t>(pos + size));
+        pos += size;
+        return true;
+    };
+    int restored = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        // Version 1 keyed an entry by track number (instruments only); version 2 by processor name, so effects fit too.
+        std::string processorName, stem;
+        if (version == 1) {
+            uint32_t track = 0;
+            if (!get32(file, pos, track)) {
+                break;
+            }
+            processorName = "track" + std::to_string(track);
+        } else if (!getString(processorName)) {
+            break;
+        }
+        uint32_t blobSize = 0;
+        if (!getString(stem) || !get32(file, pos, blobSize) || pos + blobSize > file.size()) {
+            break;
+        }
+        const std::vector<uint8_t> blob(file.begin() + static_cast<std::ptrdiff_t>(pos), file.begin() + static_cast<std::ptrdiff_t>(pos + blobSize));
+        pos += blobSize;
+
+        std::string loaded;
+        for (size_t t = 0; t < tracks_.size() && loaded.empty(); ++t) {
+            for (const std::string& name : chains_[t]) {
+                if (name == processorName) {
+                    const auto effect = effectStems_.find(name);
+                    loaded = effect != effectStems_.end() ? effect->second : instruments_[t];
+                }
+            }
+        }
+        if (loaded != stem) {
+            continue;
+        }
+        auto processor = plugins_.find(processorName);
+        if (processor && processor->plugin().loadState(blob)) {
+            ++restored;
+        }
+    }
+    return restored;
+#else
+    (void)path;
+    error = "built without VST3 hosting";
+    return 0;
+#endif
+}
+
 int Session::finish(ClipInfo info, std::unique_ptr<jitnodes::AudioProgram> program, float gain, std::vector<wavy::ClipEvent> events,
                     std::string& error) {
     try {
-        const int track = player_.hasTrackProgram(info.track) ? info.track : -1;
-        const int added = program ? player_.addClip(info.start, info.length, std::move(program), gain, std::move(events), track)
+        const int added = program ? player_.addClip(info.start, info.length, std::move(program), gain, std::move(events), info.track)
                                   : player_.addEventClip(info.track, info.start, info.length, std::move(events));
         if (added < 0) {
             error = "no room for another clip";

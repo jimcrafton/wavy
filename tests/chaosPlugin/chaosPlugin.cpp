@@ -150,6 +150,13 @@ public:
         parameters.addParameter(STR16("Gain"), nullptr, 0, 0.5, ParameterInfo::kCanAutomate, pGain);
         return kResultOk;
     }
+
+    // Like a plugin whose latency follows a setting: tell the host to look again.
+    tresult PLUGIN_API setParamNormalized(ParamID id, ParamValue value) SMTG_OVERRIDE {
+        const tresult r = EditController::setParamNormalized(id, value);
+        if (id == pLatency && componentHandler) componentHandler->restartComponent(kLatencyChanged);
+        return r;
+    }
 };
 
 }  // namespace

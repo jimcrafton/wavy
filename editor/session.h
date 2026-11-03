@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <utility>
@@ -9,6 +10,7 @@
 #include "jitnodes/audio/audioProgram.h"
 #include "wavy/clipPlayer.h"
 #ifdef WAVY_HAS_VST3
+#include "wavy/pluginEditor.h"
 #include "wavy/pluginHost.h"
 #endif
 
@@ -93,11 +95,31 @@ public:
     int addGraphClip(int track, uint64_t startFrame, int bars, std::string& error);
     int addNotesClip(int track, uint64_t startFrame, int bars, std::string& error);
 
-    // Loads the VST3 instrument at `path` onto `track`: MIDI clips added to it afterwards drive the plugin through the track's long-lived
-    // program instead of the built-in voices. Only before streaming starts. False with `error` filled in.
-    bool setTrackInstrument(int track, const std::string& path, std::string& error);
+    // Loads the VST3 instrument (class `classIndex` of the module at `path`) onto `track`: MIDI clips added to it afterwards drive the
+    // plugin through the track's long-lived program instead of the built-in voices. A track that already has an instrument gets it
+    // replaced (its window is closed, its patch is lost). Only while no audio callback runs. False with `error` filled in, and the
+    // track unchanged when the plugin is not an instrument or cannot be loaded.
+    bool setTrackInstrument(int track, const std::string& path, std::string& error, size_t classIndex = 0);
+    // Appends the VST3 effect at `path` to the track's chain (after the instrument, if any), so the track's clips and instrument run
+    // through it. Same audio rule. False with `error` filled in.
+    bool addTrackEffect(int track, const std::string& path, std::string& error, size_t classIndex = 0);
+    int effectCount(int track) const;
     // Name of the track's plugin, or empty.
     std::string instrumentName(int track) const;
+    // Main thread, from a timer: acts on restartComponent requests from the plugins (a latency change recomputes delay compensation).
+    void pollPlugins();
+    // Opens (or raises) the track's plugin editor window. False with `error` filled in when there is no plugin or it has no editor.
+    bool openInstrumentEditor(int track, std::string& error);
+    // Same for the track's `index`-th effect (0 = the first one after the instrument).
+    bool openEffectEditor(int track, int index, std::string& error);
+    // The HWND the plugin editor windows are owned by (the editor's main window), so they stay above it.
+    void setEditorOwner(void* hwnd) { editorOwner_ = hwnd; }
+
+    // Writes every track plugin's state (its patch) to `path`. Only while no audio callback is running (before start or after close).
+    bool saveInstrumentStates(const std::string& path, std::string& error);
+    // Restores the states saved by saveInstrumentStates into the plugins now loaded on the same tracks. A saved entry whose track has no
+    // plugin, or a different one, is skipped. A missing file is not an error. Returns how many plugins were restored; same audio rule.
+    int loadInstrumentStates(const std::string& path, std::string& error);
 
     // Clip under the timeline frame on a track, or -1.
     int clipAt(int track, uint64_t frame) const;
@@ -110,6 +132,9 @@ public:
 
 private:
     void renderPreview(ClipInfo& info) const;
+#ifdef WAVY_HAS_VST3
+    bool rebuildTrack(int track, std::string& error);
+#endif
     int finish(ClipInfo info, std::unique_ptr<jitnodes::AudioProgram> program, float gain, std::vector<wavy::ClipEvent> events,
                std::string& error);
 
@@ -120,8 +145,16 @@ private:
 #ifdef WAVY_HAS_VST3
     wavy::PluginHost plugins_;
     std::vector<std::string> instruments_;  // per track
+    std::vector<std::vector<std::string>> chains_;  // per track: processor names in series, the instrument first
+    int effectCounter_ = 0;
+    std::map<std::string, std::string> effectStems_;  // processor name -> plugin file name, for the effects
 #endif
     wavy::ClipPlayer player_;
+#ifdef WAVY_HAS_VST3
+    std::map<std::string, std::unique_ptr<wavy::PluginEditorWindow>> editors_;  // by processor name; after plugins_: windows close before their plugins are freed
+    void* editorOwner_ = nullptr;
+    bool openEditorFor(const std::string& processorName, std::string& error);
+#endif
     int sampleCount_ = 0;
 };
 

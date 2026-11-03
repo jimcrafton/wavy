@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <filesystem>
+#include <tuple>
 #include <vector>
 
 #include "jitnodes/jitnodes.h"
@@ -291,4 +292,99 @@ TEST(ClipPlayerStereo, MonoClipOnAStereoPlayerIsCentred) {
     player.render(out, 256);
     EXPECT_FLOAT_EQ(l[200], 0.3f);
     EXPECT_FLOAT_EQ(r[200], 0.3f);
+}
+
+namespace {
+
+struct Mixer {
+    ClipPlayer player{block, 2};
+    Mixer() {
+        player.addClip(0, 100000, constantStereoProgram(1.0f, 1.0f), 1.0f, {}, 0);
+        player.addClip(0, 100000, constantStereoProgram(0.2f, 0.2f), 1.0f, {}, 1);
+        player.play();
+    }
+    std::pair<float, float> settle() {
+        std::vector<float> l(4 * block), r(4 * block);
+        float* out[] = {l.data(), r.data()};
+        player.render(out, 4 * block);
+        return {l.back(), r.back()};
+    }
+};
+
+}  // namespace
+
+TEST(TrackMixer, VolumePanMuteAndSoloShapeTheTrackOutputs) {
+    Mixer m;
+    auto [l, r] = m.settle();
+    EXPECT_NEAR(l, 1.2f, 1e-5f);
+    EXPECT_NEAR(r, 1.2f, 1e-5f);
+
+    m.player.setTrackVolume(0, 0.5f);
+    m.player.setTrackMute(1, true);
+    std::tie(l, r) = m.settle();
+    EXPECT_NEAR(l, 0.5f, 1e-5f);
+    EXPECT_NEAR(r, 0.5f, 1e-5f);
+
+    m.player.setTrackPan(0, 0.5f);
+    std::tie(l, r) = m.settle();
+    EXPECT_NEAR(l, 0.25f, 1e-5f);
+    EXPECT_NEAR(r, 0.5f, 1e-5f);
+
+    m.player.setTrackPan(0, -1.0f);
+    std::tie(l, r) = m.settle();
+    EXPECT_NEAR(l, 0.5f, 1e-5f);
+    EXPECT_NEAR(r, 0.0f, 1e-5f);
+
+    m.player.setTrackMute(1, false);
+    m.player.setTrackSolo(1, true);
+    std::tie(l, r) = m.settle();
+    EXPECT_NEAR(l, 0.2f, 1e-5f);
+    EXPECT_NEAR(r, 0.2f, 1e-5f);
+
+    m.player.setTrackSolo(1, false);
+    m.player.setTrackVolume(0, 1.0f);
+    m.player.setTrackPan(0, 0.0f);
+    std::tie(l, r) = m.settle();
+    EXPECT_NEAR(l, 1.2f, 1e-5f);
+}
+
+TEST(TrackMixer, ChangesAreSmoothedOverOneBlockAndOutOfRangeIsIgnored) {
+    Mixer m;
+    m.settle();
+    m.player.setTrackMute(1, true);
+    m.player.setTrackMute(0, true);
+    std::vector<float> l(block), r(block);
+    float* out[] = {l.data(), r.data()};
+    m.player.render(out, block);
+    EXPECT_GT(l.front(), l.back());
+    EXPECT_GT(l.front(), 0.0f);
+    EXPECT_NEAR(l.back(), 0.0f, 1e-5f);
+
+    m.player.setTrackVolume(99, 0.0f);
+    m.player.setTrackPan(-1, 1.0f);
+    EXPECT_FLOAT_EQ(m.player.trackVolume(99), 1.0f);
+    m.player.setTrackVolume(0, 100.0f);
+    EXPECT_FLOAT_EQ(m.player.trackVolume(0), 4.0f);
+}
+
+TEST(TrackMixer, MonoPlayerAppliesVolumeAndIgnoresPan) {
+    ClipPlayer player(block);
+    Network net;
+    const NodeId line = net.addNode("line");
+    net.node(line).setFloat("count", static_cast<float>(block));
+    const NodeId level = net.addNode("wrangle");
+    net.node(level).setString("code", "x = a;");
+    net.connect(line, level);
+    auto program = AudioProgram::compile(net, level, {block, {"x"}});
+    program->param(level, 0) = 0.8f;
+    player.addClip(0, 100000, std::move(program), 1.0f, {}, 2);
+    player.setTrackPan(2, 1.0f);
+    player.setTrackVolume(2, 0.5f);
+    player.play();
+    std::vector<float> out(4 * block);
+    player.render(out.data(), 4 * block);
+    EXPECT_NEAR(out.back(), 0.4f, 1e-5f);
+    player.setTrackMute(2, true);
+    player.render(out.data(), 4 * block);
+    EXPECT_FLOAT_EQ(out.back(), 0.0f);
 }

@@ -10,6 +10,10 @@
 
 #include "jitnodes/audio/eventBuffer.h"
 
+namespace Steinberg::Vst {
+class IEditController;
+}
+
 namespace wavy {
 
 struct VstClassInfo {
@@ -127,7 +131,12 @@ public:
     std::vector<uint8_t> saveState();
     bool loadState(const std::vector<uint8_t>& blob);
 
+    // The plugin's edit controller (null when it has none), for hosting its view. Main thread.
+    Steinberg::Vst::IEditController* editController() const;
+
     // Flags from IComponentHandler::restartComponent since the last call (main thread). Act on them there, never in process().
+    // Values are the SDK's RestartFlags.
+    enum Restart : int32_t { reloadComponent = 1, ioChanged = 2, paramValuesChanged = 4, latencyChanged = 8, paramTitlesChanged = 16 };
     int32_t takeRestartFlags();
 
     struct Impl;

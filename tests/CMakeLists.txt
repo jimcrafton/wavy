@@ -5,6 +5,7 @@ add_executable(wavy_tests
     test_audioStereo.cpp
     test_audioSteps.cpp
     test_clipPlayer.cpp
+    test_masterLimiter.cpp
     test_version.cpp
 )
 
@@ -28,7 +29,14 @@ if(TARGET vst3::hosting)
     target_compile_options(wavyChaos PRIVATE /W0 /utf-8 /EHsc)
   endif()
 
-  target_sources(wavy_tests PRIVATE test_vstPlugin.cpp test_vstChaos.cpp test_pluginHost.cpp)
+  target_sources(wavy_tests PRIVATE test_vstPlugin.cpp test_vstChaos.cpp test_pluginHost.cpp test_session.cpp ../editor/session.cpp
+    test_pluginScanner.cpp test_pluginBrowser.cpp ../editor/pluginBrowser.cpp)
+  target_include_directories(wavy_tests PRIVATE ../editor)
+  target_compile_definitions(wavy_tests PRIVATE WAVY_HAS_VST3 WAVY_SCAN_PATH="$<TARGET_FILE:wavyScan>")
+  add_dependencies(wavy_tests wavyScan)
+  if(WIN32)
+    target_sources(wavy_tests PRIVATE test_pluginEditor.cpp)
+  endif()
   target_compile_definitions(wavy_tests PRIVATE WAVY_CHAOS_PATH="$<TARGET_FILE:wavyChaos>")
   add_dependencies(wavy_tests wavyChaos)
 endif()

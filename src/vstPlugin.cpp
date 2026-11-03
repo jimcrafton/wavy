@@ -674,6 +674,8 @@ bool VstPlugin::loadState(const std::vector<uint8_t>& blob) {
     return true;
 }
 
+IEditController* VstPlugin::editController() const { return impl_->controller; }
+
 int32_t VstPlugin::takeRestartFlags() { return impl_->handler ? impl_->handler->restartFlags.exchange(0, std::memory_order_acq_rel) : 0; }
 
 }  // namespace wavy

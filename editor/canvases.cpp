@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <map>
 #include <memory>
 
@@ -165,13 +166,107 @@ void TimelineCanvas::paint(BLContext& ctx) {
     ctx.fill_rect(BLRect(px, 0, 1, h));
 }
 
+namespace {
+
+constexpr float stripTop = 53.0f, stripHeight = 16.0f;
+
+struct StripRects {
+    float muteX, soloX, volumeX, volumeW, panX, panW;
+};
+
+StripRects stripRects(float w) {
+    constexpr float panWidth = 44.0f;
+    return {14.0f, 36.0f, 62.0f, std::max(20.0f, w - 62.0f - panWidth - 16.0f), w - panWidth - 8.0f, panWidth};
+}
+
+constexpr float minDb = -60.0f, maxDb = 6.0f;
+
+float gainOfPosition(float pos) { return pos <= 0.0f ? 0.0f : std::pow(10.0f, (minDb + pos * (maxDb - minDb)) / 20.0f); }
+
+float positionOfGain(float gain) {
+    return gain <= 0.0f ? 0.0f : std::clamp((20.0f * std::log10(gain) - minDb) / (maxDb - minDb), 0.0f, 1.0f);
+}
+
+}  // namespace
+
+bool HeadersCanvas::hitStrip(const newui::Point& p, bool reset) {
+    const int track = static_cast<int>(p.y / laneHeight);
+    if (track < 0 || track >= static_cast<int>(state_.session.tracks().size())) return false;
+    const float localY = p.y - static_cast<float>(track) * laneHeight;
+    if (localY < stripTop || localY > stripTop + stripHeight) return false;
+    const StripRects r = stripRects(bounds().width());
+    ClipPlayer& player = state_.session.player();
+    if (p.x >= r.muteX && p.x < r.muteX + 18.0f) {
+        if (!reset) player.setTrackMute(track, !player.trackMuted(track));
+    } else if (p.x >= r.soloX && p.x < r.soloX + 18.0f) {
+        if (!reset) player.setTrackSolo(track, !player.trackSoloed(track));
+    } else if (p.x >= r.volumeX && p.x <= r.volumeX + r.volumeW) {
+        dragTrack_ = track;
+        drag_ = Drag::volume;
+        if (reset) player.setTrackVolume(track, 1.0f);
+        else dragTo(p.x);
+    } else if (p.x >= r.panX && p.x <= r.panX + r.panW) {
+        dragTrack_ = track;
+        drag_ = Drag::pan;
+        if (reset) player.setTrackPan(track, 0.0f);
+        else dragTo(p.x);
+    } else {
+        return false;
+    }
+    if (reset) drag_ = Drag::none;
+    return true;
+}
+
+void HeadersCanvas::dragTo(float x) {
+    const StripRects r = stripRects(bounds().width());
+    ClipPlayer& player = state_.session.player();
+    if (drag_ == Drag::volume) {
+        player.setTrackVolume(dragTrack_, gainOfPosition(std::clamp((x - r.volumeX) / r.volumeW, 0.0f, 1.0f)));
+    } else if (drag_ == Drag::pan) {
+        const float pos = std::clamp((x - r.panX) / r.panW, 0.0f, 1.0f) * 2.0f - 1.0f;
+        player.setTrackPan(dragTrack_, std::abs(pos) < 0.06f ? 0.0f : pos);
+    }
+}
+
 HeadersCanvas::HeadersCanvas(EditorState& state) : state_(state) {
     setVisible(true);
+    using Handler = std::function<newui::SyncReturn(newui::View&, const newui::Point&, std::uint32_t, std::uint32_t)>;
+    onMouseMove.add(Handler([this](newui::View&, const newui::Point& p, std::uint32_t, std::uint32_t) {
+        if (drag_ == Drag::none) return newui::SyncReturn::Handled;
+        dragTo(p.x);
+        redraw();
+        return newui::SyncReturn::Handled;
+    }));
+    onMouseUp.add(Handler([this](newui::View&, const newui::Point&, std::uint32_t, std::uint32_t) {
+        drag_ = Drag::none;
+        return newui::SyncReturn::Handled;
+    }));
+    onMouseLeft.add(Handler([this](newui::View&, const newui::Point&, std::uint32_t, std::uint32_t) {
+        drag_ = Drag::none;
+        return newui::SyncReturn::Handled;
+    }));
+    onMouseDblClick.add(Handler([this](newui::View&, const newui::Point& p, std::uint32_t, std::uint32_t) {
+        hitStrip(p, true);
+        redraw();
+        return newui::SyncReturn::Handled;
+    }));
     onMouseDown.add(std::function<newui::SyncReturn(newui::View&, const newui::Point&, std::uint32_t, std::uint32_t)>(
         [this](newui::View&, const newui::Point& p, std::uint32_t, std::uint32_t) {
             const int track = static_cast<int>(p.y / laneHeight);
             if (track >= 0 && track < static_cast<int>(state_.session.tracks().size())) {
+                if (hitStrip(p, false)) {
+                    redraw();
+                    return newui::SyncReturn::Handled;
+                }
                 state_.track = track;
+                if (p.x >= bounds().width() - editButtonWidth) {
+                    const float localY = p.y - static_cast<float>(track) * laneHeight;
+                    if (localY >= effectButtonTop && state_.session.effectCount(track) > 0 && state_.openEffectEditor) {
+                        state_.openEffectEditor(track, 0);
+                    } else if (localY < effectButtonTop && !state_.session.instrumentName(track).empty() && state_.openEditor) {
+                        state_.openEditor(track);
+                    }
+                }
                 if (state_.changed) state_.changed();
             }
             return newui::SyncReturn::Handled;
@@ -190,6 +285,49 @@ void HeadersCanvas::paint(BLContext& ctx) {
         ctx.set_fill_style(rgb(tracks[t].color));
         ctx.fill_rect(BLRect(0, y, 5, laneHeight - 1.0f));
         drawText(ctx, std::to_string(t + 1) + " " + tracks[t].name, 12.0f, 14.0f, y + 20.0f, BLRgba32(0xFFE4E4E6));
+        const std::string instrument = state_.session.instrumentName(static_cast<int>(t));
+        if (!instrument.empty()) {
+            drawText(ctx, instrument, 10.0f, 14.0f, y + 38.0f, BLRgba32(0xFF8E8E94));
+            ctx.set_fill_style(BLRgba32(0xFF3A3F47));
+            ctx.fill_rect(BLRect(w - editButtonWidth + 4.0f, y + 6.0f, editButtonWidth - 10.0f, 20.0f));
+            drawText(ctx, "Edit", 10.0f, w - editButtonWidth + 10.0f, y + 20.0f, BLRgba32(0xFFE4E4E6));
+        }
+        {
+            const StripRects r = stripRects(w);
+            const ClipPlayer& player = state_.session.player();
+            const int id = static_cast<int>(t);
+            const float sy = y + stripTop;
+            auto button = [&](float x, const char* label, bool on, uint32_t onColor) {
+                ctx.set_fill_style(BLRgba32(on ? onColor : 0xFF3A3F47));
+                ctx.fill_rect(BLRect(x, sy, 18.0f, stripHeight));
+                drawText(ctx, label, 10.0f, x + 5.0f, sy + 12.0f, BLRgba32(on ? 0xFF101012 : 0xFFE4E4E6));
+            };
+            button(r.muteX, "M", player.trackMuted(id), 0xFFF2B84A);
+            button(r.soloX, "S", player.trackSoloed(id), 0xFF3FB4F0);
+
+            ctx.set_fill_style(BLRgba32(0xFF111113));
+            ctx.fill_rect(BLRect(r.volumeX, sy, r.volumeW, stripHeight));
+            ctx.set_fill_style(player.trackMuted(id) ? BLRgba32(0xFF55555C) : rgb(tracks[t].color));
+            ctx.fill_rect(BLRect(r.volumeX, sy, r.volumeW * positionOfGain(player.trackVolume(id)), stripHeight));
+            const float volume = player.trackVolume(id);
+            char text[16];
+            if (volume <= 0.0f) std::snprintf(text, sizeof(text), "-inf");
+            else std::snprintf(text, sizeof(text), "%.1f dB", 20.0f * std::log10(volume));
+            drawText(ctx, text, 9.0f, r.volumeX + 4.0f, sy + 12.0f, BLRgba32(0xFFE4E4E6));
+
+            ctx.set_fill_style(BLRgba32(0xFF111113));
+            ctx.fill_rect(BLRect(r.panX, sy, r.panW, stripHeight));
+            const float pan = player.trackPan(id), centre = r.panX + r.panW * 0.5f;
+            ctx.set_fill_style(BLRgba32(0xFF8E9096));
+            ctx.fill_rect(BLRect(std::min(centre, centre + pan * r.panW * 0.5f), sy, std::max(1.0f, std::abs(pan) * r.panW * 0.5f), stripHeight));
+            ctx.set_fill_style(BLRgba32(0xFFE4E4E6));
+            ctx.fill_rect(BLRect(centre - 0.5f, sy, 1.0f, stripHeight));
+        }
+        if (state_.session.effectCount(static_cast<int>(t)) > 0) {
+            ctx.set_fill_style(BLRgba32(0xFF3A3F47));
+            ctx.fill_rect(BLRect(w - editButtonWidth + 4.0f, y + effectButtonTop + 2.0f, editButtonWidth - 10.0f, 20.0f));
+            drawText(ctx, "FX", 10.0f, w - editButtonWidth + 14.0f, y + effectButtonTop + 16.0f, BLRgba32(0xFFE4E4E6));
+        }
     }
 }
 

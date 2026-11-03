@@ -22,11 +22,38 @@ struct ClipPlayer::Clip {
     std::array<uint16_t, 128> held{};  // event clips: per note, the channels with a note on that this clip has not yet turned off
 };
 
+// A ring of the last maxCompensation frames per channel; process() replaces the block by itself delayed by `delay` frames.
+struct ClipPlayer::DelayLine {
+    explicit DelayLine(size_t channels) : channels(channels), data(channels * ClipPlayer::maxCompensation, 0.0f) {}
+
+    void process(float* const* io, size_t frames, size_t delay) noexcept {
+        constexpr size_t size = ClipPlayer::maxCompensation;
+        delay = std::min(delay, size - 1);
+        for (size_t c = 0; c < channels; ++c) {
+            float* ring = data.data() + c * size;
+            size_t at = pos;
+            for (size_t i = 0; i < frames; ++i) {
+                ring[at] = io[c][i];
+                io[c][i] = ring[(at + size - delay) % size];
+                at = (at + 1) % size;
+            }
+        }
+        pos = (pos + frames) % size;
+    }
+
+    size_t channels;
+    std::vector<float> data;
+    size_t pos = 0;
+};
+
 struct ClipPlayer::Track {
     std::unique_ptr<jitnodes::AudioProgram> program;
     std::vector<std::shared_ptr<jitnodes::ExternalProcessor>> processors;
+    std::vector<TransportListener*> listeners;  // the processors that want the transport
     std::vector<float> in, out;  // two channels, channel c at c * blockSize
     jitnodes::EventBuffer events;
+    DelayLine line{2};
+    std::atomic<size_t> delay{0};
 };
 
 ClipPlayer::ClipPlayer(size_t blockSize, size_t channels)
@@ -34,6 +61,8 @@ ClipPlayer::ClipPlayer(size_t blockSize, size_t channels)
     if (blockSize == 0 || blockSize % 16 != 0) throw std::invalid_argument("ClipPlayer: block size must be a multiple of 16");
     if (channels != 1 && channels != 2) throw std::invalid_argument("ClipPlayer: channels must be 1 or 2");
     for (auto& s : slots_) s.store(nullptr);
+    bus_.assign(static_cast<size_t>(maxTracks) * 2 * blockSize, 0.0f);
+    directLine_ = std::make_unique<DelayLine>(channels);
 }
 
 ClipPlayer::~ClipPlayer() = default;
@@ -90,11 +119,87 @@ void ClipPlayer::setTrackProgram(int track, std::unique_ptr<jitnodes::AudioProgr
     t->out.assign(blockSize_ * 2, 0.0f);
     t->program = std::move(program);
     t->processors = std::move(processors);
+    for (const auto& processor : t->processors) {
+        if (auto* listener = dynamic_cast<TransportListener*>(processor.get())) t->listeners.push_back(listener);
+    }
     t->program->warm();
     t->program->resetState();
     tracks_[static_cast<size_t>(track)].store(t.get(), std::memory_order_release);
     ownedTracks_.push_back(std::move(t));  // a replaced one stays alive until clear()
     hasTracks_.store(true, std::memory_order_release);
+    updateLatencyCompensation();
+}
+
+void ClipPlayer::updateLatencyCompensation() {
+    size_t latencies[maxTracks] = {};
+    size_t longest = 0;
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        Track* track = tracks_[t].load(std::memory_order_acquire);
+        if (!track) continue;
+        for (const auto& processor : track->processors) {
+            latencies[t] += processor->latencySamples();
+        }
+        latencies[t] = std::min(latencies[t], maxCompensation - 1);
+        longest = std::max(longest, latencies[t]);
+    }
+    for (size_t t = 0; t < tracks_.size(); ++t) {
+        if (Track* track = tracks_[t].load(std::memory_order_acquire)) track->delay.store(longest - latencies[t], std::memory_order_release);
+    }
+    directDelay_.store(longest, std::memory_order_release);
+    latency_.store(longest, std::memory_order_release);
+}
+
+size_t ClipPlayer::compensationDelay(int track) const {
+    if (track < 0) return directDelay_.load(std::memory_order_acquire);
+    if (track >= maxTracks) return 0;
+    const Track* t = tracks_[static_cast<size_t>(track)].load(std::memory_order_acquire);
+    return t ? t->delay.load(std::memory_order_acquire) : 0;
+}
+
+void ClipPlayer::setTrackVolume(int track, float gain) {
+    if (track >= 0 && track < maxTracks) strips_[static_cast<size_t>(track)].volume.store(std::clamp(gain, 0.0f, 4.0f), std::memory_order_release);
+}
+void ClipPlayer::setTrackPan(int track, float pan) {
+    if (track >= 0 && track < maxTracks) strips_[static_cast<size_t>(track)].pan.store(std::clamp(pan, -1.0f, 1.0f), std::memory_order_release);
+}
+void ClipPlayer::setTrackMute(int track, bool mute) {
+    if (track >= 0 && track < maxTracks) strips_[static_cast<size_t>(track)].mute.store(mute, std::memory_order_release);
+}
+void ClipPlayer::setTrackSolo(int track, bool solo) {
+    if (track >= 0 && track < maxTracks) strips_[static_cast<size_t>(track)].solo.store(solo, std::memory_order_release);
+}
+float ClipPlayer::trackVolume(int track) const {
+    return track >= 0 && track < maxTracks ? strips_[static_cast<size_t>(track)].volume.load(std::memory_order_acquire) : 1.0f;
+}
+float ClipPlayer::trackPan(int track) const {
+    return track >= 0 && track < maxTracks ? strips_[static_cast<size_t>(track)].pan.load(std::memory_order_acquire) : 0.0f;
+}
+bool ClipPlayer::trackMuted(int track) const {
+    return track >= 0 && track < maxTracks && strips_[static_cast<size_t>(track)].mute.load(std::memory_order_acquire);
+}
+bool ClipPlayer::trackSoloed(int track) const {
+    return track >= 0 && track < maxTracks && strips_[static_cast<size_t>(track)].solo.load(std::memory_order_acquire);
+}
+
+void ClipPlayer::applyStrip(int track, float* left, float* right, bool anySolo) noexcept {
+    Strip& s = strips_[static_cast<size_t>(track)];
+    const bool audible = !s.mute.load(std::memory_order_acquire) && (!anySolo || s.solo.load(std::memory_order_acquire));
+    const float volume = audible ? s.volume.load(std::memory_order_acquire) : 0.0f;
+    const float pan = right ? s.pan.load(std::memory_order_acquire) : 0.0f;
+    const float targetLeft = volume * (pan > 0.0f ? 1.0f - pan : 1.0f);
+    const float targetRight = volume * (pan < 0.0f ? 1.0f + pan : 1.0f);
+    if (targetLeft == 1.0f && targetRight == 1.0f && s.lastLeft == 1.0f && s.lastRight == 1.0f) return;
+    const float stepLeft = (targetLeft - s.lastLeft) / static_cast<float>(blockSize_);
+    const float stepRight = (targetRight - s.lastRight) / static_cast<float>(blockSize_);
+    float gl = s.lastLeft, gr = s.lastRight;
+    for (size_t i = 0; i < blockSize_; ++i) {
+        gl += stepLeft;
+        gr += stepRight;
+        left[i] *= gl;
+        if (right) right[i] *= gr;
+    }
+    s.lastLeft = targetLeft;
+    s.lastRight = targetRight;
 }
 
 bool ClipPlayer::hasTrackProgram(int track) const {
@@ -164,7 +269,7 @@ void ClipPlayer::mixClip(Clip& clip) noexcept {
     }
 
     ensureBlock(clip, static_cast<int64_t>((to - 1 - clip.start) / blockSize_), blockSize_);
-    float* dest = track ? track->in.data() : block_.data();
+    float* dest = track ? track->in.data() : clip.track >= 0 ? bus_.data() + static_cast<size_t>(clip.track) * 2 * blockSize_ : block_.data();
     const size_t destChannels = track ? 2 : channels_;
     for (size_t ch = 0; ch < destChannels; ++ch) {
         const size_t source = std::min(ch, clip.channels - 1);
@@ -179,18 +284,25 @@ bool ClipPlayer::setParam(int clip, jitnodes::NodeId node, size_t index, float v
     return params_.push({clip, node, static_cast<uint32_t>(index), value});
 }
 
-void ClipPlayer::runTracks(bool release) noexcept {
-    for (auto& slot : tracks_) {
-        Track* track = slot.load(std::memory_order_acquire);
+void ClipPlayer::runTracks(bool release, bool playing, bool anySolo) noexcept {
+    const double bpm = bpm_.load(std::memory_order_acquire);
+    const int64_t blockStart = static_cast<int64_t>(playing ? nextStart_ - blockSize_ : nextStart_);
+    for (int t = 0; t < maxTracks; ++t) {
+        Track* track = tracks_[static_cast<size_t>(t)].load(std::memory_order_acquire);
         if (!track) continue;
         if (release) {
             for (auto& processor : track->processors) {
                 processor->reset();
             }
         }
+        for (TransportListener* listener : track->listeners) {
+            listener->setTransport(bpm, playing, blockStart);
+        }
         float* out[] = {track->out.data(), track->out.data() + blockSize_};
         const float* in[] = {track->in.data(), track->in.data() + blockSize_};
         track->program->process(out, &track->events, in);
+        track->line.process(out, blockSize_, track->delay.load(std::memory_order_acquire));
+        applyStrip(t, out[0], out[1], anySolo);
         for (size_t i = 0; i < blockSize_; ++i) {
             if (channels_ == 2) {
                 block_[i] += out[0][i];
@@ -211,6 +323,7 @@ void ClipPlayer::renderBlock(bool playing) noexcept {
         if (float* p = clip->program->tryParam(change.node, change.index)) *p = change.value;
     }
     std::fill(block_.begin(), block_.end(), 0.0f);
+    std::fill(bus_.begin(), bus_.end(), 0.0f);
     for (auto& slot : tracks_) {
         Track* track = slot.load(std::memory_order_acquire);
         if (!track) continue;
@@ -224,8 +337,28 @@ void ClipPlayer::renderBlock(bool playing) noexcept {
         }
         nextStart_ += blockSize_;
     }
-    runTracks(releaseTracks_);
+    bool anySolo = false;
+    for (const Strip& strip : strips_) {
+        anySolo = anySolo || strip.solo.load(std::memory_order_acquire);
+    }
+    for (int t = 0; t < maxTracks; ++t) {
+        float* left = bus_.data() + static_cast<size_t>(t) * 2 * blockSize_;
+        float* right = channels_ == 2 ? left + blockSize_ : nullptr;
+        applyStrip(t, left, right, anySolo);
+        for (size_t i = 0; i < blockSize_; ++i) {
+            block_[i] += left[i];
+            if (right) block_[blockSize_ + i] += right[i];
+        }
+    }
+    if (hasTracks_.load(std::memory_order_acquire)) {
+        float* direct[] = {block_.data(), block_.data() + blockSize_};
+        directLine_->process(direct, blockSize_, directDelay_.load(std::memory_order_acquire));
+    }
+    runTracks(releaseTracks_, playing, anySolo);
     releaseTracks_ = false;
+    if (limiter_.enabled()) {
+        limiter_.process(block_.data(), channels_, blockSize_, blockSize_);
+    }
     served_ = 0;
 }
 
